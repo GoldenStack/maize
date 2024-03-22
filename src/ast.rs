@@ -1,34 +1,10 @@
 use core::fmt;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 
-pub struct Definition {
-    params: Params,
-    expr: Expr
-}
-
-impl Display for Definition {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} = ", self.params)
-    }
-}
-
-pub enum Params {
-    Name(String),
-    App(Box<Params>, Box<Params>),
-}
-
+#[derive(Debug)]
 pub enum Expr {
     Name(String),
     App(Box<Expr>, Box<Expr>)
-}
-
-impl Display for Params {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Params::Name(str) => write!(f, "{}", str),
-            Params::App(a, b) => write!(f, "({} {})", a, b),
-        }
-    }
 }
 
 impl Display for Expr {
@@ -109,13 +85,8 @@ fn real_token(input: &mut &str) -> PResult<String> {
                 continue;
             }
         }
-        dbg!(&str);
         return Ok(str);
     }
-}
-
-fn alpha_token(input: &mut &str) -> PResult<String> {
-    parse_while(char::is_alphabetic, "alphabetical token(s)")(input)
 }
 
 fn ws(input: &mut &str) -> PResult<()> {
@@ -123,59 +94,22 @@ fn ws(input: &mut &str) -> PResult<()> {
         .map(|_| ()).or_else(|_| Ok(()))
 }
 
-impl Definition {
-    pub fn parse(input: &mut &str) -> PResult<Definition> {
-        let params = Params::parse(input)?;
-
-        ws(input)?;
-        token("=")(input)?;
-        ws(input)?;
-
-        let expr = Expr::parse(input)?;
-
-        Ok(Definition { params, expr })
-    }
-}
-
-impl Params {
-    pub fn parse(input: &mut &str) -> PResult<Params> {
-        let mut next = None;
-
-        loop {
-            ws(input)?;
-
-            let right;
-
-            if let Ok(_) = token("(")(input) {
-                right = Params::parse(input)?;
-    
-                ws(input)?;
-    
-                if let Err(_) = token(")")(input) {
-                    return Err((input.to_owned(), "Expected closing parentheses".to_owned()));
-                }
-            } else if let Ok(token) = alpha_token(input) {
-                right = Params::Name(token);
-            } else {
-                return next.ok_or((input.to_owned(), format!("Expected 'alpha' or '(', found none")));
-            }
-
-            if let Some(left) = next {
-                next = Some(Params::App(Box::new(left), Box::new(right)));
-            } else {
-                next = Some(right);
-            }
-        }
-    }
-}
 
 pub fn get_associativity(left: &Expr, right: &Expr) -> Associativity {
     let left = leftmost(left);
     let right = leftmost(right);
 
-    if left == "*" && right == "+" { return Associativity::Left; }
-    if left == "+" && right == "*" { return Associativity::Right; }
-    if left == "`**`" && right == "`*`" { return Associativity::Right; }
+    if left == "`=`" { return Associativity::Right; }
+    if right == "`=`" { return Associativity::Left; }
+
+    if left == "`->`" && right == "`->`" { return Associativity::Right; }
+
+    if left == "`^`" && right == "`+`" { return Associativity::Right; }
+    if left == "`+`" && right == "`^`" { return Associativity::Left; }
+
+    // if left == "*" && right == "+" { return Associativity::Left; }
+    // if left == "+" && right == "*" { return Associativity::Right; }
+    // if left == "`**`" && right == "`*`" { return Associativity::Right; }
 
     Associativity::Left
 }
@@ -236,11 +170,18 @@ impl Expr {
                 r = Expr::Name(tkn);
             }
 
-
             if let Some(l) = left {
                 let order = get_associativity(&l, &r);
 
-                println!("{} ||| {} ||| {:?}", l, r, order);
+                let prev_infix = match &l {
+                    Expr::App(n, _) => match n.as_ref() {
+                        Expr::Name(name) => name.starts_with("`") && name.ends_with("`"),
+                        _ => false
+                    }
+                    _ => false
+                };
+
+                // println!("{} ||| {} ||| {}                     ||| {:?} {}", l, r, input, order, prev_infix);
 
                 if order == Associativity::Right {
                     // Right associative parsing is lazy: i.e. we wait for the
@@ -255,7 +196,11 @@ impl Expr {
                     // Left associative parsing is immediate: i.e. we parse
                     // tokens immediately and fill in with the `loop {}`.
                     if infix {
-                        left = Some(Expr::App(Box::new(r), Box::new(l)));
+                        // if let Ok(nl) = Expr::parse(input) {
+                            // left = Some(Expr::App(Box::new(Expr::App(Box::new(r), Box::new(l))), Box::new(nl)));
+                        // } else {
+                            left = Some(Expr::App(Box::new(r), Box::new(l)));
+                        // }
                     } else {
                         left = Some(Expr::App(Box::new(l), Box::new(r)));
                     }
