@@ -25,6 +25,16 @@ fn parse_char(input: &mut &str) -> Option<char> {
     Some(c)
 }
 
+fn peek_token(input: &mut &str) -> Option<String> {
+    let old_input = &input[0..];
+
+    let _ = ws(input);
+    let token = real_token(input);
+
+    *input = old_input;
+    return token.ok();
+}
+
 fn parse_while(predicate: fn(char) -> bool, name: &'static str) -> impl Fn(&mut &str) -> PResult<String> {
     move |input| {
         let mut str = String::new();
@@ -56,10 +66,6 @@ fn token(token: &'static str) -> impl Fn(&mut &str) -> PResult<()> {
             Err((input.to_string(), format!("Expected '{}'", token)))
         }
     }
-}
-
-fn any_token(input: &mut &str) -> PResult<String> {
-    parse_while(|c| !c.is_whitespace(), "non-whitespace token(s)")(input)
 }
 
 fn real_token(input: &mut &str) -> PResult<String> {
@@ -94,22 +100,20 @@ fn ws(input: &mut &str) -> PResult<()> {
         .map(|_| ()).or_else(|_| Ok(()))
 }
 
-
-pub fn get_associativity(left: &Expr, right: &Expr) -> Associativity {
-    let left = leftmost(left);
-    let right = leftmost(right);
+pub fn get_associativity(left: &String, right: &String) -> Associativity {
 
     if left == "`=`" { return Associativity::Right; }
     if right == "`=`" { return Associativity::Left; }
 
     if left == "`->`" && right == "`->`" { return Associativity::Right; }
 
-    if left == "`^`" && right == "`+`" { return Associativity::Right; }
-    if left == "`+`" && right == "`^`" { return Associativity::Left; }
+    if left == "`^`" && right == "`^`" { return Associativity::Right; }
 
-    // if left == "*" && right == "+" { return Associativity::Left; }
-    // if left == "+" && right == "*" { return Associativity::Right; }
-    // if left == "`**`" && right == "`*`" { return Associativity::Right; }
+    if left == "`^`" && right == "`+`" { return Associativity::Left; }
+    if left == "`+`" && right == "`^`" { return Associativity::Right; }
+
+    if left == "*" && right == "+" { return Associativity::Left; }
+    if left == "+" && right == "*" { return Associativity::Right; }
 
     Associativity::Left
 }
@@ -127,88 +131,88 @@ pub fn leftmost(expr: &Expr) -> &String {
     }
 }
 
+fn is_infix(op: &String) -> bool {
+    op.starts_with("`") && op.ends_with("`")
+}
+
 impl Expr {
 
-    pub fn parse(input: &mut &str) -> PResult<Expr> {
-        let mut left = None;
+    pub fn app(app: Expr, var: Expr) -> Expr {
+        Expr::App(Box::new(app), Box::new(var))
+    }
 
-        // Loop for handling left associativity
+    pub fn parse_basic(input: &mut &str) -> PResult<Expr> {
+        let old_input = &input[0..];
+        real_token(input)
+            .and_then(|op|
+                if is_infix(&op) {
+                    *input = old_input;
+                    Err((input.to_owned(), format!("Expected operation, found infix '{}'", op)))
+                }
+                else { Ok(op) }
+            )
+            .map(Expr::Name)
+    }
+
+    pub fn parse_prefix(input: &mut &str) -> PResult<Expr> {
+        ws(input)?;
+        let mut left = Expr::parse_basic(input)?;
+
         loop {
+            ws(input)?;
+
+            let old_input = &input[0..];
+
+            let Ok(right) = Expr::parse_basic(input) else {
+                return Ok(left);
+            };
+            ws(input)?;
+
+            let order = get_associativity(leftmost(&left), leftmost(&right));
+
+            let r = if order == Associativity::Right {
+                *input = old_input;
+                Expr::parse_prefix(input)?
+            } else {
+                right
+            };
+
+            left = Expr::App(Box::new(left), Box::new(r));
+        }
+    }
+
+    pub fn parse_infix(input: &mut &str) -> PResult<Expr> {
+        ws(input)?;
+        let mut left = Expr::parse_prefix(input)?;
+
+        loop {
+            ws(input)?;
+
+            let Some(infix) = real_token(input).ok().filter(is_infix) else {
+                return Ok(left);
+            };
 
             ws(input)?;
 
             let old_input = &input[0..];
 
-            let Ok(tkn) = real_token(input) else {
-                if let Some(left) = left {
-                    return Ok(left);
-                } else {
-                    return Err((input.to_owned(), "Expected token".to_owned()));
-                }
+            let right = Expr::parse_prefix(input)?;
+            ws(input)?;
+
+            let Some(next) = peek_token(input).filter(is_infix) else {
+                return Ok(Expr::app(Expr::app(Expr::Name(infix), left), right));
             };
-            
-            let infix = tkn.starts_with("`") && tkn.ends_with("`");
 
-            let r;
+            let order = get_associativity(&infix, &next);
 
-            if tkn == ")" {
+            let r = if order == Associativity::Right {
                 *input = old_input;
-                if let Some(left) = left {
-                    return Ok(left);
-                } else {
-                    return Err((input.to_owned(), "Expected token".to_owned()));
-                }
-            } else if tkn == "(" {
-                r = Expr::parse(input)?;
-    
-                ws(input)?;
-    
-                if let Err(_) = token(")")(input) {
-                    return Err((input.to_owned(), "Expected closing parentheses".to_owned()));
-                }
+                Expr::parse_infix(input)?
             } else {
-                r = Expr::Name(tkn);
-            }
+                right
+            };
 
-            if let Some(l) = left {
-                let order = get_associativity(&l, &r);
-
-                let prev_infix = match &l {
-                    Expr::App(n, _) => match n.as_ref() {
-                        Expr::Name(name) => name.starts_with("`") && name.ends_with("`"),
-                        _ => false
-                    }
-                    _ => false
-                };
-
-                // println!("{} ||| {} ||| {}                     ||| {:?} {}", l, r, input, order, prev_infix);
-
-                if order == Associativity::Right {
-                    // Right associative parsing is lazy: i.e. we wait for the
-                    // tree to be built up from recursive Expr::parse calls.
-                    *input = old_input;
-                    // if infix {
-                    //     left = Some(Expr::App(Box::new(Expr::parse(input)?), Box::new(l)));    
-                    // } else {
-                        left = Some(Expr::App(Box::new(l), Box::new(Expr::parse(input)?)));
-                    // }
-                } else {
-                    // Left associative parsing is immediate: i.e. we parse
-                    // tokens immediately and fill in with the `loop {}`.
-                    if infix {
-                        // if let Ok(nl) = Expr::parse(input) {
-                            // left = Some(Expr::App(Box::new(Expr::App(Box::new(r), Box::new(l))), Box::new(nl)));
-                        // } else {
-                            left = Some(Expr::App(Box::new(r), Box::new(l)));
-                        // }
-                    } else {
-                        left = Some(Expr::App(Box::new(l), Box::new(r)));
-                    }
-                }
-
-            } else {
-                left = Some(r);
-            }
+            left = Expr::app(Expr::app(Expr::Name(infix), left), r);
         }
     }
 
