@@ -1,7 +1,7 @@
 use core::fmt;
 use std::fmt::{Debug, Display};
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum Expr {
     Name(String),
     App(Box<Expr>, Box<Expr>)
@@ -53,7 +53,7 @@ fn parse_while(predicate: fn(char) -> bool, input: &mut &str) -> Option<String> 
 
 fn require(token: &str, input: &mut &str) -> PResult<()> {
     if input.starts_with(token) {
-        parse_char(input);
+        *input = &input[token.len()..];
         Ok(())
     } else {
         Err((input.to_string(), format!("Expected '{}'", token)))
@@ -116,7 +116,6 @@ pub enum Associativity {
     Left, Right
 }
 
-
 pub fn leftmost(expr: &Expr) -> &String {
     match expr {
         Expr::App(a, _) => leftmost(a),
@@ -128,11 +127,32 @@ fn is_infix(op: &String) -> bool {
     op.starts_with("`") && op.ends_with("`")
 }
 
-fn app(app: Expr, var: Expr) -> Expr {
-    Expr::App(Box::new(app), Box::new(var))
-}
 
 impl Expr {
+
+    pub fn name(name: &str) -> Expr {
+        Expr::Name(name.to_owned())
+    }
+
+    pub fn app(app: Expr, var: Expr) -> Expr {
+        Expr::App(Box::new(app), Box::new(var))
+    }
+
+    pub fn infix(infix: String, left: Expr, right: Expr) -> Expr {
+        Expr::app(Expr::app(Expr::Name(infix), left), right)
+    }
+
+    pub fn raw_infix(infix: &str, left: &str, right: &str) -> Expr {
+        Expr::infix(infix.into(), Expr::name(left), Expr::name(right))
+    }
+
+    pub fn fold<const N: usize>(app: Expr, vars: [Expr; N]) -> Expr {
+        let mut app = app;
+        for var in vars {
+            app = Expr::app(app, var);
+        }
+        app
+    }
 
     pub fn parse_basic(input: &mut &str) -> PResult<Expr> {
         let old_input = &input[0..];
@@ -164,7 +184,7 @@ impl Expr {
 
         Ok(Expr::Name(token))
     }
-
+ 
     pub fn parse_prefix(input: &mut &str) -> PResult<Expr> {
         ws(input)?;
         let mut left = Expr::parse_basic(input)?;
@@ -181,14 +201,15 @@ impl Expr {
 
             let order = get_associativity(leftmost(&left), leftmost(&right));
 
-            let r = if order == Associativity::Right {
-                *input = old_input;
-                Expr::parse_prefix(input)?
-            } else {
-                right
+            let r = match order {
+                Associativity::Right => {
+                    *input = old_input;
+                    Expr::parse_prefix(input)?
+                }
+                Associativity::Left => right
             };
 
-            left = Expr::App(Box::new(left), Box::new(r));
+            left = Expr::app(left, r);
         }
     }
 
@@ -214,20 +235,25 @@ impl Expr {
             ws(input)?;
 
             let Some(next) = peek(real_token, input).ok().filter(is_infix) else {
-                return Ok(app(app(Expr::Name(infix), left), right));
+                return Ok(Expr::infix(infix, left, right));
             };
 
             let order = get_associativity(&infix, &next);
 
-            let r = if order == Associativity::Right {
-                *input = old_input;
-                Expr::parse_infix(input)?
-            } else {
-                right
+            let r = match order {
+                Associativity::Right => {
+                    *input = old_input;
+                    Expr::parse_infix(input)?
+                }
+                Associativity::Left => right
             };
 
-            left = app(app(Expr::Name(infix), left), r);
+            left = Expr::infix(infix, left, r);
         }
+    }
+
+    pub fn parse(input: &mut &str) -> PResult<Expr> {
+        Expr::parse_infix(input)
     }
 
 }
