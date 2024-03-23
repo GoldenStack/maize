@@ -10,7 +10,7 @@ fn main() {
 
     // let mut input = "(2 `*` 4)";
 
-    let mut input = "2 `*` (3 `+` 5) `*` 3";
+    let mut input = "1 `*` (2 `+` 3) `*` 4";
 
     println!("{}", Expr::parse_infix(&mut input).unwrap());
 }

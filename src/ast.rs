@@ -25,46 +25,38 @@ fn parse_char(input: &mut &str) -> Option<char> {
     Some(c)
 }
 
-fn peek_token(input: &mut &str) -> Option<String> {
+fn peek<T>(function: fn(&mut &str) -> T, input: &mut &str) -> T {
     let old_input = &input[0..];
 
     let _ = ws(input);
-    let token = real_token(input);
+    let token = function(input);
 
     *input = old_input;
-    return token.ok();
+    return token;
 }
 
-fn parse_while(predicate: fn(char) -> bool, name: &'static str) -> impl Fn(&mut &str) -> PResult<String> {
-    move |input| {
-        let mut str = String::new();
+fn parse_while(predicate: fn(char) -> bool, input: &mut &str) -> Option<String> {
+    let mut str = String::new();
 
-        loop {
-            if let Some(char) = input.chars().next() {
-                if predicate(char) {
-                    str.push(char);
-                    parse_char(input);
-                    continue;
-                }
-            }
-
-            if str.is_empty() {
-                return Err((input.to_string(), format!("Expected '{}', found none", name)));
-            } else {
-                return Ok(str);
+    loop {
+        if let Some(char) = input.chars().next() {
+            if predicate(char) {
+                str.push(char);
+                parse_char(input);
+                continue;
             }
         }
+
+        return if str.is_empty() { None } else { Some(str) };
     }
 }
 
-fn token(token: &'static str) -> impl Fn(&mut &str) -> PResult<()> {
-    move |input| {
-        if input.starts_with(token) {
-            parse_char(input);
-            Ok(())
-        } else {
-            Err((input.to_string(), format!("Expected '{}'", token)))
-        }
+fn require(token: &str, input: &mut &str) -> PResult<()> {
+    if input.starts_with(token) {
+        parse_char(input);
+        Ok(())
+    } else {
+        Err((input.to_string(), format!("Expected '{}'", token)))
     }
 }
 
@@ -96,8 +88,8 @@ fn real_token(input: &mut &str) -> PResult<String> {
 }
 
 fn ws(input: &mut &str) -> PResult<()> {
-    parse_while(char::is_whitespace, "whitespace token(s)")(input)
-        .map(|_| ()).or_else(|_| Ok(()))
+    parse_while(char::is_whitespace, input);
+    Ok(())
 }
 
 pub fn get_associativity(left: &String, right: &String) -> Associativity {
@@ -136,33 +128,33 @@ fn is_infix(op: &String) -> bool {
     op.starts_with("`") && op.ends_with("`")
 }
 
-impl Expr {
+fn app(app: Expr, var: Expr) -> Expr {
+    Expr::App(Box::new(app), Box::new(var))
+}
 
-    pub fn app(app: Expr, var: Expr) -> Expr {
-        Expr::App(Box::new(app), Box::new(var))
-    }
+impl Expr {
 
     pub fn parse_basic(input: &mut &str) -> PResult<Expr> {
         let old_input = &input[0..];
-        let tk = real_token(input)?;
+        let token = real_token(input)?;
 
-        if is_infix(&tk) {
+        if is_infix(&token) {
             *input = old_input;
-            return Err((input.to_owned(), format!("Expected operation, found infix '{}'", tk)));
+            return Err((input.to_owned(), format!("Expected operation, found infix '{}'", token)));
         }
 
-        // if tk == ")" {
-        //     *input = old_input;
-        //     return Err((input.to_owned(), "Found closing parentheses".to_owned()));
-        // }
+        if token == ")" {
+            *input = old_input;
+            return Err((input.to_owned(), "Found closing parentheses".to_owned()));
+        }
 
-        if tk == "(" {
+        if token == "(" {
             ws(input)?;
             let infix = Expr::parse_infix(input)?;
 
             ws(input)?;
 
-            if let Err(_) = token(")")(input) {
+            if let Err(_) = require(")", input) {
                 return Err((input.to_owned(), "Expected closing parentheses".to_owned()));
             }
 
@@ -170,7 +162,7 @@ impl Expr {
         }
         
 
-        Ok(Expr::Name(tk))
+        Ok(Expr::Name(token))
     }
 
     pub fn parse_prefix(input: &mut &str) -> PResult<Expr> {
@@ -181,8 +173,6 @@ impl Expr {
             ws(input)?;
 
             let old_input = &input[0..];
-
-            if peek_token(input).filter(|t| t == ")").is_some() { return Ok(left); }
 
             let Ok(right) = Expr::parse_basic(input) else {
                 return Ok(left);
@@ -209,9 +199,10 @@ impl Expr {
         loop {
             ws(input)?;
 
-            if peek_token(input).filter(|t| t == ")").is_some() { return Ok(left); }
+            let old_input = &input[0..];
 
-            let Some(infix) = real_token(input).ok().filter(is_infix) else {
+            let Some(infix) = real_token(input).ok().filter(is_infix).filter(|t| t != ")") else {
+                *input = old_input;
                 return Ok(left);
             };
 
@@ -222,8 +213,8 @@ impl Expr {
             let right = Expr::parse_prefix(input)?;
             ws(input)?;
 
-            let Some(next) = peek_token(input).filter(is_infix) else {
-                return Ok(Expr::app(Expr::app(Expr::Name(infix), left), right));
+            let Some(next) = peek(real_token, input).ok().filter(is_infix) else {
+                return Ok(app(app(Expr::Name(infix), left), right));
             };
 
             let order = get_associativity(&infix, &next);
@@ -235,7 +226,7 @@ impl Expr {
                 right
             };
 
-            left = Expr::app(Expr::app(Expr::Name(infix), left), r);
+            left = app(app(Expr::Name(infix), left), r);
         }
     }
 
