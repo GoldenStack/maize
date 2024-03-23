@@ -108,6 +108,7 @@ pub fn get_associativity(left: &String, right: &String) -> Associativity {
     if left == "`->`" && right == "`->`" { return Associativity::Right; }
 
     if left == "`^`" && right == "`^`" { return Associativity::Right; }
+    if left == "`*`" && right == "`*`" { return Associativity::Right; }
 
     if left == "`^`" && right == "`+`" { return Associativity::Left; }
     if left == "`+`" && right == "`^`" { return Associativity::Right; }
@@ -143,15 +144,33 @@ impl Expr {
 
     pub fn parse_basic(input: &mut &str) -> PResult<Expr> {
         let old_input = &input[0..];
-        real_token(input)
-            .and_then(|op|
-                if is_infix(&op) {
-                    *input = old_input;
-                    Err((input.to_owned(), format!("Expected operation, found infix '{}'", op)))
-                }
-                else { Ok(op) }
-            )
-            .map(Expr::Name)
+        let tk = real_token(input)?;
+
+        if is_infix(&tk) {
+            *input = old_input;
+            return Err((input.to_owned(), format!("Expected operation, found infix '{}'", tk)));
+        }
+
+        // if tk == ")" {
+        //     *input = old_input;
+        //     return Err((input.to_owned(), "Found closing parentheses".to_owned()));
+        // }
+
+        if tk == "(" {
+            ws(input)?;
+            let infix = Expr::parse_infix(input)?;
+
+            ws(input)?;
+
+            if let Err(_) = token(")")(input) {
+                return Err((input.to_owned(), "Expected closing parentheses".to_owned()));
+            }
+
+            return Ok(infix);
+        }
+        
+
+        Ok(Expr::Name(tk))
     }
 
     pub fn parse_prefix(input: &mut &str) -> PResult<Expr> {
@@ -162,6 +181,8 @@ impl Expr {
             ws(input)?;
 
             let old_input = &input[0..];
+
+            if peek_token(input).filter(|t| t == ")").is_some() { return Ok(left); }
 
             let Ok(right) = Expr::parse_basic(input) else {
                 return Ok(left);
@@ -187,6 +208,8 @@ impl Expr {
 
         loop {
             ws(input)?;
+
+            if peek_token(input).filter(|t| t == ")").is_some() { return Ok(left); }
 
             let Some(infix) = real_token(input).ok().filter(is_infix) else {
                 return Ok(left);
