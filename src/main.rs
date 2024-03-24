@@ -4,12 +4,12 @@ use crate::ast::Expr;
 
 fn main() {
 
-    let mut input = "length (pos x y z) `=` (x `^` 2 `+` y `^` 2 `+` z `^` 2) `^` 0.5";
+    let mut input = "   length   (   pos   x   y   z   ) `=`   (   x   `^`   2   `+`   y   `^`   2   `+`   z   `^`   2  )   `^`   0.5   ";
 
     // let mut input = "fst (a `,` b) `=` a";
 
     println!("Parsing:  {}", input);
-    println!("Yields:   {}", Expr::parse_infix(&mut input).unwrap());
+    println!("Yields:   {}", Expr::parse(&mut input).unwrap());
 }
 
 #[test]
@@ -38,7 +38,7 @@ pub fn test_parsing() {
         )
     );
     
-    assert_eq!(Expr::parse_infix(&mut input), Ok(expected));
+    assert_eq!(Expr::parse(&mut input), Ok(expected));
 
 }
 

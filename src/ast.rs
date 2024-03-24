@@ -28,7 +28,6 @@ fn parse_char(input: &mut &str) -> Option<char> {
 fn peek<T>(function: fn(&mut &str) -> T, input: &mut &str) -> T {
     let old_input = &input[0..];
 
-    let _ = ws(input);
     let token = function(input);
 
     *input = old_input;
@@ -52,6 +51,7 @@ fn parse_while(predicate: fn(char) -> bool, input: &mut &str) -> Option<String> 
 }
 
 fn require(token: &str, input: &mut &str) -> PResult<()> {
+    ws(input)?;
     if input.starts_with(token) {
         *input = &input[token.len()..];
         Ok(())
@@ -61,6 +61,7 @@ fn require(token: &str, input: &mut &str) -> PResult<()> {
 }
 
 fn real_token(input: &mut &str) -> PResult<String> {
+    ws(input)?;
 
     let predicate: fn(char) -> bool = |c| c.is_whitespace() || c == '(' || c == ')';
 
@@ -169,10 +170,7 @@ impl Expr {
         }
 
         if token == "(" {
-            ws(input)?;
-            let infix = Expr::parse_infix(input)?;
-
-            ws(input)?;
+            let infix = Expr::parse_infix(None, input)?;
 
             if let Err(_) = require(")", input) {
                 return Err((input.to_owned(), "Expected closing parentheses".to_owned()));
@@ -185,41 +183,33 @@ impl Expr {
         Ok(Expr::Name(token))
     }
  
-    pub fn parse_prefix(input: &mut &str) -> PResult<Expr> {
-        ws(input)?;
-        let mut left = Expr::parse_basic(input)?;
+    pub fn parse_prefix(left: Option<Expr>, input: &mut &str) -> PResult<Expr> {
+        let mut left = match left {
+            Some(expr) => expr,
+            None => Expr::parse_basic(input)?,
+        };
 
         loop {
-            ws(input)?;
-
-            let old_input = &input[0..];
-
             let Ok(right) = Expr::parse_basic(input) else {
                 return Ok(left);
             };
-            ws(input)?;
 
             let order = get_associativity(leftmost(&left), leftmost(&right));
 
-            let r = match order {
-                Associativity::Right => {
-                    *input = old_input;
-                    Expr::parse_prefix(input)?
-                }
+            left = Expr::app(left, match order {
+                Associativity::Right => Expr::parse_prefix(Some(right), input)?,
                 Associativity::Left => right
-            };
-
-            left = Expr::app(left, r);
+            });
         }
     }
 
-    pub fn parse_infix(input: &mut &str) -> PResult<Expr> {
-        ws(input)?;
-        let mut left = Expr::parse_prefix(input)?;
+    pub fn parse_infix(left: Option<Expr>, input: &mut &str) -> PResult<Expr> {
+        let mut left = match left {
+            Some(expr) => expr,
+            None => Expr::parse_prefix(None, input)?,
+        };
 
         loop {
-            ws(input)?;
-
             let old_input = &input[0..];
 
             let Some(infix) = real_token(input).ok().filter(is_infix).filter(|t| t != ")") else {
@@ -227,33 +217,30 @@ impl Expr {
                 return Ok(left);
             };
 
-            ws(input)?;
+            let left_infix = Expr::app(Expr::Name(infix), left);
 
-            let old_input = &input[0..];
-
-            let right = Expr::parse_prefix(input)?;
-            ws(input)?;
+            let all = Expr::parse_prefix(Some(left_infix), input)?;
 
             let Some(next) = peek(real_token, input).ok().filter(is_infix) else {
-                return Ok(Expr::infix(infix, left, right));
+                return Ok(all);
             };
 
-            let order = get_associativity(&infix, &next);
+            let order = get_associativity(leftmost(&all), &next);
 
-            let r = match order {
+            left = match order {
                 Associativity::Right => {
-                    *input = old_input;
-                    Expr::parse_infix(input)?
+                    match all {
+                        Expr::Name(_) => Expr::parse_infix(Some(all), input)?, // Should not happen
+                        Expr::App(l, r) => Expr::App(l, Box::new(Expr::parse_infix(Some(*r), input)?)),
+                    }
                 }
-                Associativity::Left => right
+                Associativity::Left => all
             };
-
-            left = Expr::infix(infix, left, r);
         }
     }
 
     pub fn parse(input: &mut &str) -> PResult<Expr> {
-        Expr::parse_infix(input)
+        Expr::parse_infix(None, input)
     }
 
 }
