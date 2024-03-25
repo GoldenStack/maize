@@ -4,22 +4,22 @@ use crate::ast::Parser;
 
 pub fn default_parser() -> Parser {
     let mut parser = Parser::new();
-    parser.ra("`->`");
-    parser.ra("`^`");
-    parser.ra("`*`");
-    parser.gt("`^`", "`*`");
-    parser.gt("`*`", "`+`");
-    parser.lt("`=`", "`+`");
-    parser.infix("`=`");
-    parser.infix("`^`");
-    parser.infix("`*`");
-    parser.infix("`+`");
+    parser.ra("->");
+    parser.ra("^");
+    parser.ra("*");
+    parser.gt("^", "*");
+    parser.gt("*", "+");
+    parser.lt("=", "+");
+    parser.infix("=");
+    parser.infix("^");
+    parser.infix("*");
+    parser.infix("+");
     parser
 }
 
 fn main() {
 
-    let mut input = "length (pos x y z) `=` (x `^` 2 `+` y `^` 2 `+` z `^` 2) `^` 0.5";
+    let mut input = "length (pos x y z) = (x ^ 2 + y ^ 2 + z ^ 2) ^ 0.5";
 
     let parser = default_parser();
 
@@ -35,23 +35,23 @@ pub fn test_parsing() {
 
     let parser = default_parser();
     
-    let mut input = "length (pos x y z) `=` (x `^` 2 `+` y `^` 2 `+` z `^` 2) `^` 0.5";
+    let mut input = "length (pos x y z) = (x ^ 2 + y ^ 2 + z ^ 2) ^ 0.5";
 
     let expected = Expr::infix(
-        "`=`".into(),
+        "=".into(),
         Expr::app(
             Expr::name("length"),
             Expr::fold(Expr::name("pos"), [Expr::name("x"), Expr::name("y"), Expr::name("z")])
         ),
         Expr::infix(
-            "`^`".into(),
+            "^".into(),
             Expr::infix(
-                "`+`".into(),
-                Expr::raw_infix("`^`", "x", "2"),
+                "+".into(),
+                Expr::raw_infix("^", "x", "2"),
                 Expr::infix(
-                    "`+`".into(),
-                    Expr::raw_infix("`^`", "y", "2"),
-                    Expr::raw_infix("`^`", "z", "2")
+                    "+".into(),
+                    Expr::raw_infix("^", "y", "2"),
+                    Expr::raw_infix("^", "z", "2")
                 )
             ),
             Expr::name("0.5")

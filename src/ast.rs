@@ -131,13 +131,18 @@ impl Parser {
         self.gt(right, left)
     }
 
-    pub fn get(&self, left: &str, right: &str) -> Option<Associativity> {
+    pub fn get_defined_associativity(&self, left: &str, right: &str) -> Option<Associativity> {
         if left == right {
             return self.self_referential.get(left).cloned();
         } else {
             let l = self.get_ident(left)?;
             let r = self.get_ident(right)?;
 
+            // If a path exists from L -> R, L binds stronger than R, so we use
+            // left associativity. If a path exists from R -> L, we know R is
+            // stronger than L.
+            // We use a directed acyclic graph, and its acyclicity means these
+            // two conditions are mutually exclusive.
             if self.path_from(l, r) {
                 return Some(Associativity::Left);
             } else if self.path_from(r, l) {
@@ -145,6 +150,25 @@ impl Parser {
             } else {
                 return None;
             }
+        }
+    }
+
+    pub fn get_associativity(&self, left: &str, right: &str, input: &str) -> PResult<Associativity> {
+        if let Some(defined) = self.get_defined_associativity(left, right) {
+            return Ok(defined);
+        }
+
+        // By default, prefix expressions bind more powerfully than infix
+        // expressions.
+        let (infix_l, infix_r) = (self.is_infix(left), self.is_infix(right));
+        if infix_l && !infix_r {
+            Ok(Associativity::Right)
+        } else if !infix_l && infix_r {
+            Ok(Associativity::Left)
+        } else {
+            // We could throw an error, but we don't.
+            // Err((input.to_owned(), format!("Undefined operator order between {} and {}", left, right)))
+            Ok(Associativity::Left)
         }
     }
 
@@ -175,11 +199,18 @@ impl Parser {
             },
             "(" => { // Parse opening parentheses
                 // Allow any expression within them
-                let infix = self.parse(input)?;
+                let infix = match self.parse(input) {
+                    Ok(ok) => ok,
+                    Err(err) => {
+                        *input = old_input;
+                        return Err(err);
+                    }
+                };
     
                 ws(input)?;
                 // Require closing parentheses
                 if let Err(_) = require(")", input) {
+                    *input = old_input;
                     return Err((input.to_owned(), "Expected closing parentheses".to_owned()));
                 }
     
@@ -197,8 +228,7 @@ impl Parser {
                 return Ok(left);
             };
 
-            let order = self.get(leftmost(&left), leftmost(&right))
-                .unwrap_or(Associativity::Left);
+            let order = self.get_associativity(leftmost(&left), leftmost(&right), input)?;
 
             // If it's right associative relative to the left element we pair it
             // up with the element after it. Otherwise we ignore the element
@@ -235,8 +265,7 @@ impl Parser {
                 return Ok(all);
             };
 
-            let order = self.get(leftmost(&all), &next)
-                .unwrap_or(Associativity::Left);
+            let order = self.get_associativity(leftmost(&all), &next, input)?;
             
             // If there's another infix with right associativity relative to the
             // current expression, let it take the right element from this one.
@@ -263,11 +292,18 @@ impl Parser {
         self.parse_infix(self.parse_prefix(self.parse_basic(input)?, input)?, input)
     }
 
-    pub fn is_infix(&self, op: &String) -> bool {
+    pub fn is_infix(&self, op: &str) -> bool {
         // Operation is infix if grave symbols are used, or if it's marked as
         // infix. Grave symbols around an infix operation negate its infixation.
-        // (op.starts_with("`") && op.ends_with("`")) || 
-        self.infix.contains(op)
+        if self.infix.contains(op) {
+            return true;
+        }
+
+        if op.starts_with("`") && op.ends_with("`") {
+            return !self.infix.contains(&op[1..op.len()-1]);
+        }
+
+        false
     }
 
 }
