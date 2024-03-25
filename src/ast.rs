@@ -1,5 +1,5 @@
 use core::fmt;
-use std::{collections::HashMap, fmt::{Debug, Display}};
+use std::{collections::{HashMap, HashSet}, fmt::{Debug, Display}};
 
 use daggy::{petgraph::{algo::dijkstra, visit::IntoNodeIdentifiers}, Dag, NodeIndex};
 
@@ -93,7 +93,8 @@ fn ws(input: &mut &str) -> PResult<()> {
 
 pub struct Parser {
     partial_order: Dag<String, (), u32>,
-    self_referential: HashMap<String, Associativity>
+    self_referential: HashMap<String, Associativity>,
+    infix: HashSet<String>,
 }
 
 impl Parser {
@@ -101,7 +102,8 @@ impl Parser {
     pub fn new() -> Self {
         Parser {
             partial_order: Dag::new(),
-            self_referential: HashMap::new()
+            self_referential: HashMap::new(),
+            infix: HashSet::new(),
         }
     }
 
@@ -154,12 +156,16 @@ impl Parser {
         self.self_referential.insert(op.to_owned(), Associativity::Right);
     }
 
+    pub fn infix(&mut self, op: &str) {
+        self.infix.insert(op.to_owned());
+    }
+
     pub fn parse_basic(&self, input: &mut &str) -> PResult<Expr> {
         let old_input = &input[0..];
         let token = real_token(input)?;
 
         match token.as_str() {
-            _ if is_infix(&token) => { // Do not allow standalone infixes
+            _ if self.is_infix(&token) => { // Do not allow standalone infixes
                 *input = old_input;
                 return Err((input.to_owned(), format!("Expected operation, found infix '{}'", token)));
             },
@@ -204,16 +210,16 @@ impl Parser {
         }
     }
 
-    pub fn parse_infix(&self, mut left: Expr, input: &mut &str) -> PResult<Expr> {
+    fn peek_infix(&self, input: &&str) -> Option<String> {
+        peek(real_token, input).ok().filter(|t| self.is_infix(t)).filter(|t| t != ")")
+    }
 
-        fn peek_infix(input: &mut &str) -> Option<String> {
-            peek(real_token, input).ok().filter(is_infix).filter(|t| t != ")")
-        }
+    pub fn parse_infix(&self, mut left: Expr, input: &mut &str) -> PResult<Expr> {
 
         loop {
             // If we can't find an infix operator, this means it's not an infix
             // expression, so we can exit.
-            let Some(infix) = peek_infix(input) else {
+            let Some(infix) = self.peek_infix(input) else {
                 return Ok(left);
             };
             real_token(input)?;
@@ -225,7 +231,7 @@ impl Parser {
             let all = self.parse_prefix(left_and_infix, input)?;
 
             // Try to find another infix
-            let Some(next) = peek_infix(input) else {
+            let Some(next) = self.peek_infix(input) else {
                 return Ok(all);
             };
 
@@ -257,6 +263,13 @@ impl Parser {
         self.parse_infix(self.parse_prefix(self.parse_basic(input)?, input)?, input)
     }
 
+    pub fn is_infix(&self, op: &String) -> bool {
+        // Operation is infix if grave symbols are used, or if it's marked as
+        // infix. Grave symbols around an infix operation negate its infixation.
+        // (op.starts_with("`") && op.ends_with("`")) || 
+        self.infix.contains(op)
+    }
+
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
@@ -269,10 +282,6 @@ pub fn leftmost(expr: &Expr) -> &String {
         Expr::App(a, _) => leftmost(a),
         Expr::Name(name) => name, 
     }
-}
-
-fn is_infix(op: &String) -> bool {
-    op.starts_with("`") && op.ends_with("`")
 }
 
 

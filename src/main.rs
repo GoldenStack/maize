@@ -10,6 +10,10 @@ pub fn default_parser() -> Parser {
     parser.gt("`^`", "`*`");
     parser.gt("`*`", "`+`");
     parser.lt("`=`", "`+`");
+    parser.infix("`=`");
+    parser.infix("`^`");
+    parser.infix("`*`");
+    parser.infix("`+`");
     parser
 }
 
