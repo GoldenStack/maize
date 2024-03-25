@@ -1,5 +1,7 @@
 use core::fmt;
-use std::fmt::{Debug, Display};
+use std::{collections::HashMap, fmt::{Debug, Display}};
+
+use daggy::{petgraph::{algo::dijkstra, visit::IntoNodeIdentifiers}, Dag, NodeIndex};
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum Expr {
@@ -89,26 +91,175 @@ fn ws(input: &mut &str) -> PResult<()> {
     Ok(())
 }
 
-pub fn get_associativity(left: &String, right: &String) -> Associativity {
-
-    if left == "`=`" { return Associativity::Right; }
-    if right == "`=`" { return Associativity::Left; }
-
-    if left == "`->`" && right == "`->`" { return Associativity::Right; }
-
-    if left == "`^`" && right == "`^`" { return Associativity::Right; }
-    if left == "`*`" && right == "`*`" { return Associativity::Right; }
-
-    if left == "`^`" && right == "`+`" { return Associativity::Left; }
-    if left == "`+`" && right == "`^`" { return Associativity::Right; }
-
-    if left == "*" && right == "+" { return Associativity::Left; }
-    if left == "+" && right == "*" { return Associativity::Right; }
-
-    Associativity::Left
+pub struct Parser {
+    partial_order: Dag<String, (), u32>,
+    self_referential: HashMap<String, Associativity>
 }
 
-#[derive(PartialEq, Eq, Debug)]
+impl Parser {
+
+    pub fn new() -> Self {
+        Parser {
+            partial_order: Dag::new(),
+            self_referential: HashMap::new()
+        }
+    }
+
+    pub fn get_ident(&self, str: &str) -> Option<NodeIndex> {
+        self.partial_order.node_identifiers()
+            .find(|i| self.partial_order[*i] == str)
+    }
+
+    pub fn ensure_ident(&mut self, str: &str) -> NodeIndex {
+        self.get_ident(str).unwrap_or_else(|| self.partial_order.add_node(str.to_owned()))
+    }
+
+    pub fn path_from(&self, left: NodeIndex, right: NodeIndex) -> bool {
+        dijkstra(&self.partial_order, left, Some(right), |_| 1).contains_key(&right)
+    }
+
+    pub fn gt(&mut self, left: &str, right: &str) -> bool {
+        let l = self.ensure_ident(left);
+        let r = self.ensure_ident(right);
+
+        self.partial_order.update_edge(l, r, ()).is_ok()
+    }
+
+    pub fn lt(&mut self, left: &str, right: &str) -> bool {
+        self.gt(right, left)
+    }
+
+    pub fn get(&self, left: &str, right: &str) -> Option<Associativity> {
+        if left == right {
+            return self.self_referential.get(left).cloned();
+        } else {
+            let l = self.get_ident(left)?;
+            let r = self.get_ident(right)?;
+
+            if self.path_from(l, r) {
+                return Some(Associativity::Left);
+            } else if self.path_from(r, l) {
+                return Some(Associativity::Right);
+            } else {
+                return None;
+            }
+        }
+    }
+
+    pub fn la(&mut self, op: &str) {
+        self.self_referential.insert(op.to_owned(), Associativity::Left);
+    }
+
+    pub fn ra(&mut self, op: &str) {
+        self.self_referential.insert(op.to_owned(), Associativity::Right);
+    }
+
+    pub fn parse_basic(&self, input: &mut &str) -> PResult<Expr> {
+        let old_input = &input[0..];
+        let token = real_token(input)?;
+
+        match token.as_str() {
+            _ if is_infix(&token) => { // Do not allow standalone infixes
+                *input = old_input;
+                return Err((input.to_owned(), format!("Expected operation, found infix '{}'", token)));
+            },
+            ")" => { // Do not allow standalone closing parentheses
+                *input = old_input;
+                return Err((input.to_owned(), "Found closing parentheses".to_owned()));
+            },
+            "(" => { // Parse opening parentheses
+                // Allow any expression within them
+                let infix = self.parse(input)?;
+    
+                ws(input)?;
+                // Require closing parentheses
+                if let Err(_) = require(")", input) {
+                    return Err((input.to_owned(), "Expected closing parentheses".to_owned()));
+                }
+    
+                return Ok(infix);
+            },
+            _ => Ok(Expr::Name(token)), // Otherwise it's a 
+        }
+    }
+ 
+    pub fn parse_prefix(&self, mut left: Expr, input: &mut &str) -> PResult<Expr> {
+        loop {
+            // If there isn't another basic expression, this means it's not a
+            // prefix operation, so we can exit.
+            let Ok(right) = self.parse_basic(input) else {
+                return Ok(left);
+            };
+
+            let order = self.get(leftmost(&left), leftmost(&right))
+                .unwrap_or(Associativity::Left);
+
+            // If it's right associative relative to the left element we pair it
+            // up with the element after it. Otherwise we ignore the element
+            // after and allow following loop iterations to handle it.
+            left = Expr::app(left, match order {
+                Associativity::Right => self.parse_prefix(right, input)?,
+                Associativity::Left => right
+            });
+        }
+    }
+
+    pub fn parse_infix(&self, mut left: Expr, input: &mut &str) -> PResult<Expr> {
+
+        fn peek_infix(input: &mut &str) -> Option<String> {
+            peek(real_token, input).ok().filter(is_infix).filter(|t| t != ")")
+        }
+
+        loop {
+            // If we can't find an infix operator, this means it's not an infix
+            // expression, so we can exit.
+            let Some(infix) = peek_infix(input) else {
+                return Ok(left);
+            };
+            real_token(input)?;
+
+            // Parse the left part and the infix part (but flipped, as is infix)
+            let left_and_infix = Expr::app(Expr::Name(infix), left);
+
+            // Append the right half 
+            let all = self.parse_prefix(left_and_infix, input)?;
+
+            // Try to find another infix
+            let Some(next) = peek_infix(input) else {
+                return Ok(all);
+            };
+
+            let order = self.get(leftmost(&all), &next)
+                .unwrap_or(Associativity::Left);
+            
+            // If there's another infix with right associativity relative to the
+            // current expression, let it take the right element from this one.
+            // Otherwise, fall back and allow following loop iterations to
+            // to handle it.
+            left = match order {
+                Associativity::Right => {
+                    match all {
+                        Expr::Name(_) => self.parse_infix(all, input)?, // Should not happen
+                        Expr::App(l, r) => Expr::App(l, Box::new(self.parse_infix(*r, input)?)),
+                    }
+                }
+                Associativity::Left => all
+            };
+        }
+    }
+
+    pub fn parse(&self, input: &mut &str) -> PResult<Expr> {
+        // Parsing occurs down the parse tree:
+        // Infix -> Prefix -> Basic
+
+        // We replicate the first version of that here as it makes other parts
+        // of the implementation much simpler.
+        self.parse_infix(self.parse_prefix(self.parse_basic(input)?, input)?, input)
+    }
+
+}
+
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum Associativity {
     Left, Right
 }
@@ -149,107 +300,6 @@ impl Expr {
             app = Expr::app(app, var);
         }
         app
-    }
-
-    pub fn parse_basic(input: &mut &str) -> PResult<Expr> {
-        let old_input = &input[0..];
-        let token = real_token(input)?;
-
-        match token.as_str() {
-            _ if is_infix(&token) => { // Do not allow standalone infixes
-                *input = old_input;
-                return Err((input.to_owned(), format!("Expected operation, found infix '{}'", token)));
-            },
-            ")" => { // Do not allow standalone closing parentheses
-                *input = old_input;
-                return Err((input.to_owned(), "Found closing parentheses".to_owned()));
-            },
-            "(" => { // Parse opening parentheses
-                // Allow any expression within them
-                let infix = Expr::parse(input)?;
-    
-                ws(input)?;
-                // Require closing parentheses
-                if let Err(_) = require(")", input) {
-                    return Err((input.to_owned(), "Expected closing parentheses".to_owned()));
-                }
-    
-                return Ok(infix);
-            },
-            _ => Ok(Expr::Name(token)), // Otherwise it's a 
-        }
-    }
- 
-    pub fn parse_prefix(mut left: Expr, input: &mut &str) -> PResult<Expr> {
-        loop {
-            // If there isn't another basic expression, this means it's not a
-            // prefix operation, so we can exit.
-            let Ok(right) = Expr::parse_basic(input) else {
-                return Ok(left);
-            };
-
-            let order = get_associativity(leftmost(&left), leftmost(&right));
-
-            // If it's right associative relative to the left element we pair it
-            // up with the element after it. Otherwise we ignore the element
-            // after and allow following loop iterations to handle it.
-            left = Expr::app(left, match order {
-                Associativity::Right => Expr::parse_prefix(right, input)?,
-                Associativity::Left => right
-            });
-        }
-    }
-
-    pub fn parse_infix(mut left: Expr, input: &mut &str) -> PResult<Expr> {
-
-        fn peek_infix(input: &mut &str) -> Option<String> {
-            peek(real_token, input).ok().filter(is_infix).filter(|t| t != ")")
-        }
-
-        loop {
-            // If we can't find an infix operator, this means it's not an infix
-            // expression, so we can exit.
-            let Some(infix) = peek_infix(input) else {
-                return Ok(left);
-            };
-            real_token(input)?;
-
-            // Parse the left part and the infix part (but flipped, as is infix)
-            let left_and_infix = Expr::app(Expr::Name(infix), left);
-
-            // Append the right half 
-            let all = Expr::parse_prefix(left_and_infix, input)?;
-
-            // Try to find another infix
-            let Some(next) = peek_infix(input) else {
-                return Ok(all);
-            };
-
-            let order = get_associativity(leftmost(&all), &next);
-
-            // If there's another infix with right associativity relative to the
-            // current expression, let it take the right element from this one.
-            // Otherwise, fall back and allow following loop iterations to
-            // to handle it.
-            left = match order {
-                Associativity::Right => {
-                    match all {
-                        Expr::Name(_) => Expr::parse_infix(all, input)?, // Should not happen
-                        Expr::App(l, r) => Expr::App(l, Box::new(Expr::parse_infix(*r, input)?)),
-                    }
-                }
-                Associativity::Left => all
-            };
-        }
-    }
-
-    pub fn parse(input: &mut &str) -> PResult<Expr> {
-        // Parsing occurs down the parse tree:
-        // Infix -> Prefix -> Basic
-
-        // We replicate the first version of that here as it makes other parts
-        // of the implementation much simpler.
-        Expr::parse_infix(Expr::parse_prefix(Expr::parse_basic(input)?, input)?, input)
     }
 
 }
