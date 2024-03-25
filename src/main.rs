@@ -62,6 +62,14 @@ pub fn test_parsing() {
 
 }
 
+#[test]
+pub fn test_parsing_2() {
+    assert_parse(
+        "a + c d e",
+        "(`+` a) ((c d) e)",
+    )
+}
+
 fn assert_parse(mut first: &str, mut second: &str) {
     let parser = default_parser();
     assert_eq!(parser.parse(&mut first), parser.parse(&mut second));

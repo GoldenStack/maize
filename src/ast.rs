@@ -216,7 +216,7 @@ impl Parser {
     
                 return Ok(infix);
             },
-            _ => Ok(Expr::Name(token)), // Otherwise it's a 
+            _ => Ok(Expr::Name(self.de_infix(token))), // Otherwise it's a named token
         }
     }
  
@@ -255,7 +255,7 @@ impl Parser {
             real_token(input)?;
 
             // Parse the left part and the infix part (but flipped, as is infix)
-            let left_and_infix = Expr::app(Expr::Name(infix), left);
+            let left_and_infix = Expr::app(Expr::Name(self.de_infix(infix)), left);
 
             // Append the right half 
             let all = self.parse_prefix(left_and_infix, input)?;
@@ -304,6 +304,14 @@ impl Parser {
         }
 
         false
+    }
+
+    pub fn de_infix(&self, op: String) -> String {
+        if op.starts_with("`") && op.ends_with("`") {
+            op[1..op.len()-1].to_owned()
+        } else {
+            op
+        }
     }
 
 }
