@@ -61,22 +61,24 @@ fn require(token: &str, input: &mut &str) -> PResult<()> {
 fn real_token(input: &mut &str) -> PResult<String> {
     ws(input)?;
 
-    let predicate: fn(char) -> bool = |c| c.is_whitespace() || c == '(' || c == ')';
-
     let Some(first) = parse_char(input) else {
         return Err((input.to_string(), format!("Expected a token, found none")));
     };
 
-    if predicate(first) {
+    let initial: fn(char) -> bool = |c| c.is_alphanumeric() || c == '.' || c == '\'' || c == '`';
+
+    if !initial(first) {
         return Ok(first.into());
     }
+
+    let following: fn(char) -> bool = |c| c.is_whitespace() || c == '(' || c == ')' || c == ',';
 
     let mut str = String::new();
     str.push(first);
 
     loop {
         if let Some(char) = input.chars().next() {
-            if !predicate(char) {
+            if !following(char) {
                 str.push(char);
                 parse_char(input);
                 continue;
@@ -299,7 +301,7 @@ impl Parser {
             return true;
         }
 
-        if op.starts_with("`") && op.ends_with("`") {
+        if op.starts_with("`") && op.ends_with("`") && op.len() > 1 {
             return !self.infix.contains(&op[1..op.len()-1]);
         }
 
@@ -307,7 +309,7 @@ impl Parser {
     }
 
     pub fn de_infix(&self, op: String) -> String {
-        if op.starts_with("`") && op.ends_with("`") {
+        if op.starts_with("`") && op.ends_with("`") && op.len() > 1 {
             op[1..op.len()-1].to_owned()
         } else {
             op
