@@ -10,11 +10,14 @@ pub fn default_parser() -> Parser {
     parser.gt("^", "*");
     parser.gt("*", "+");
     parser.lt("=", "+");
+    parser.lt("::", "->");
     parser.infix("=");
     parser.infix("^");
     parser.infix("*");
     parser.infix("+");
     parser.infix(",");
+    parser.infix("->");
+    parser.infix("::");
     parser
 }
 
@@ -24,7 +27,8 @@ fn main() {
 
     let parser = default_parser();
 
-    let mut input = "fst (a, b) = a"; 
+    let mut input = "example :: Int -> Int -> List Int -> Map (List String)";
+    let mut input = "fst (a, b) = a";
 
     println!("Parsing:  {}", input);
     println!("Yields:   {}", parser.parse(&mut input).unwrap());

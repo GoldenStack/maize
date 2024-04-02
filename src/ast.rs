@@ -61,28 +61,42 @@ fn require(token: &str, input: &mut &str) -> PResult<()> {
 fn real_token(input: &mut &str) -> PResult<String> {
     ws(input)?;
 
+    let standalone = |c: char| c == '(' || c == ')';
+    let group = |c: char| c.is_alphanumeric();
+    let always_allowed = |c: char| c == '`' || c == '\'';
+    let never_allowed = |c: char| c.is_whitespace();
+
     let Some(first) = parse_char(input) else {
         return Err((input.to_string(), format!("Expected a token, found none")));
     };
+    
+    if never_allowed(first) {
+        return Err((input.to_string(), format!("Expected a token, found invalid character {}", first)));
+    }
 
-    let initial: fn(char) -> bool = |c| c.is_alphanumeric() || c == '.' || c == '\'' || c == '`';
-
-    if !initial(first) {
+    if standalone(first) {
         return Ok(first.into());
     }
 
-    let following: fn(char) -> bool = |c| c.is_whitespace() || c == '(' || c == ')' || c == ',';
-
-    let mut str = String::new();
-    str.push(first);
+    let mut str = String::from(first);
+    
+    let mode: Option<bool> = None;
 
     loop {
         if let Some(char) = input.chars().next() {
-            if !following(char) {
-                str.push(char);
-                parse_char(input);
-                continue;
+            if standalone(char) || never_allowed(char) {
+                return Ok(str);
             }
+
+            if let Some(mode) = mode {
+                if !always_allowed(char) && mode != group(char) {
+                    return Ok(str);
+                }
+            }
+
+            str.push(char);
+            parse_char(input);
+            continue;
         }
         return Ok(str);
     }
