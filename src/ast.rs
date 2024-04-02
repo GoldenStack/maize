@@ -63,13 +63,13 @@ fn real_token(input: &mut &str) -> PResult<String> {
 
     let standalone = |c: char| c == '(' || c == ')';
     let group = |c: char| c.is_alphanumeric();
-    let always_allowed = |c: char| c == '`' || c == '\'';
+    let always_allowed = |c: char| c == '`' || c == '\'' || c == '.';
     let never_allowed = |c: char| c.is_whitespace();
 
     let Some(first) = parse_char(input) else {
         return Err((input.to_string(), format!("Expected a token, found none")));
     };
-    
+
     if never_allowed(first) {
         return Err((input.to_string(), format!("Expected a token, found invalid character {}", first)));
     }
@@ -79,8 +79,12 @@ fn real_token(input: &mut &str) -> PResult<String> {
     }
 
     let mut str = String::from(first);
-    
-    let mode: Option<bool> = None;
+
+    let mut mode: Option<bool> = if !always_allowed(first) {
+        Some(group(first))
+    } else {
+        None
+    };
 
     loop {
         if let Some(char) = input.chars().next() {
@@ -88,9 +92,13 @@ fn real_token(input: &mut &str) -> PResult<String> {
                 return Ok(str);
             }
 
-            if let Some(mode) = mode {
-                if !always_allowed(char) && mode != group(char) {
-                    return Ok(str);
+            if !always_allowed(char) {
+                if let Some(mode) = mode {
+                    if mode != group(char) {
+                        return Ok(str);
+                    }
+                } else {
+                    mode = Some(group(char));
                 }
             }
 
@@ -222,20 +230,20 @@ impl Parser {
                         return Err(err);
                     }
                 };
-    
+
                 ws(input)?;
                 // Require closing parentheses
                 if let Err(_) = require(")", input) {
                     *input = old_input;
                     return Err((input.to_owned(), "Expected closing parentheses".to_owned()));
                 }
-    
+
                 return Ok(infix);
             },
             _ => Ok(Expr::Name(self.de_infix(token))), // Otherwise it's a named token
         }
     }
- 
+
     pub fn parse_prefix(&self, mut left: Expr, input: &mut &str) -> PResult<Expr> {
         loop {
             // If there isn't another basic expression, this means it's not a
@@ -250,8 +258,8 @@ impl Parser {
             // up with the element after it. Otherwise we ignore the element
             // after and allow following loop iterations to handle it.
             left = Expr::app(left, match order {
-                Associativity::Right => self.parse_prefix(right, input)?,
-                Associativity::Left => right
+                    Associativity::Right => self.parse_prefix(right, input)?,
+                    Associativity::Left => right
             });
         }
     }
@@ -273,7 +281,7 @@ impl Parser {
             // Parse the left part and the infix part (but flipped, as is infix)
             let left_and_infix = Expr::app(Expr::Name(self.de_infix(infix)), left);
 
-            // Append the right half 
+            // Append the right half
             let all = self.parse_prefix(left_and_infix, input)?;
 
             // Try to find another infix
@@ -282,7 +290,7 @@ impl Parser {
             };
 
             let order = self.get_associativity(leftmost(&all), &next, input)?;
-            
+
             // If there's another infix with right associativity relative to the
             // current expression, let it take the right element from this one.
             // Otherwise, fall back and allow following loop iterations to
@@ -340,7 +348,7 @@ pub enum Associativity {
 pub fn leftmost(expr: &Expr) -> &String {
     match expr {
         Expr::App(a, _) => leftmost(a),
-        Expr::Name(name) => name, 
+        Expr::Name(name) => name,
     }
 }
 

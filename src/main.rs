@@ -68,11 +68,16 @@ pub fn test_parsing() {
 }
 
 #[test]
-pub fn test_parsing_2() {
+pub fn test_parsing_equality() {
     assert_parse(
         "a + c d e",
         "(`+` a) ((c d) e)",
-    )
+    );
+
+    assert_parse(
+        "fst (a, b) = a",
+        "(`=` (fst ((`,` a) b))) a",
+    );
 }
 
 fn assert_parse(mut first: &str, mut second: &str) {
