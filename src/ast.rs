@@ -27,9 +27,16 @@ fn parse_char(input: &mut &str) -> Option<char> {
     Some(c)
 }
 
-fn peek<T>(function: fn(&mut &str) -> T, input: &&str) -> T {
+fn peek<T, F: Fn(&mut &str) -> T>(function: F, input: &&str) -> T {
     let copy = &mut &input[0..];
     return function(copy);
+}
+
+fn read<T, E, F: Fn(&mut &str) -> Result<T, E>>(function: F, input: &mut &str) -> Result<T, E> {
+    let old = &mut &input[0..];
+    let result = function(input);
+    if result.is_err() { *input = old; }
+    return result;
 }
 
 fn parse_while(predicate: fn(char) -> bool, input: &mut &str) -> Option<String> {
@@ -155,43 +162,48 @@ impl Parser {
         self.gt(right, left)
     }
 
+    /// Gets the defined associativity between two operators.
+    /// If they're the same operator, it queries a local map to see what to
+    /// return.
+    /// 
+    /// If they're not, it refers to the internal directed acyclic graph.
+    /// If a path exists from left -> right, left binds stronger than right, so
+    /// we use left associativity. If a path exists from right -> left, then
+    /// right binds stronger than left, so we use right associativity.
+    /// The acyclicity of the graph ensures these conditions are mutually
+    /// exclusive.
     pub fn get_defined_associativity(&self, left: &str, right: &str) -> Option<Associativity> {
         if left == right {
             return self.self_referential.get(left).cloned();
+        }
+        let (infix_l, infix_r) = (self.get_ident(left)?, self.get_ident(right)?);
+        
+        if self.path_from(infix_l, infix_r) {
+            Some(Associativity::Left)
+        } else if self.path_from(infix_r, infix_l) {
+            Some(Associativity::Right)
         } else {
-            let l = self.get_ident(left)?;
-            let r = self.get_ident(right)?;
-
-            // If a path exists from L -> R, L binds stronger than R, so we use
-            // left associativity. If a path exists from R -> L, we know R is
-            // stronger than L.
-            // We use a directed acyclic graph, and its acyclicity means these
-            // two conditions are mutually exclusive.
-            if self.path_from(l, r) {
-                return Some(Associativity::Left);
-            } else if self.path_from(r, l) {
-                return Some(Associativity::Right);
-            } else {
-                return None;
-            }
+            None
         }
     }
 
+    /// Similar behaviour to Parser::get_defined_associativity except with
+    /// default values: prefix expressions bind stronger than infix expressions,
+    /// and operators bind to the left by default.
+    /// 
+    /// Implementation detail: The input is a parameter in case we want to throw
+    /// an exception for undefined order, but this is not current behaviour.
     pub fn get_associativity(&self, left: &str, right: &str, input: &str) -> PResult<Associativity> {
         if let Some(defined) = self.get_defined_associativity(left, right) {
             return Ok(defined);
         }
-
-        // By default, prefix expressions bind more powerfully than infix
-        // expressions.
         let (infix_l, infix_r) = (self.is_infix(left), self.is_infix(right));
+
         if infix_l && !infix_r {
             Ok(Associativity::Right)
         } else if !infix_l && infix_r {
             Ok(Associativity::Left)
         } else {
-            // We could throw an error, but we don't.
-            // Err((input.to_owned(), format!("Undefined operator order between {} and {}", left, right)))
             Ok(Associativity::Left)
         }
     }
@@ -264,8 +276,14 @@ impl Parser {
         }
     }
 
-    fn peek_infix(&self, input: &&str) -> Option<String> {
-        peek(real_token, input).ok().filter(|t| self.is_infix(t)).filter(|t| t != ")")
+    fn read_infix(&self, input: &mut &str) -> PResult<String> {
+        read(|input| real_token(input).and_then(|op| {
+            if self.is_infix(&op) && op != ")" {
+                Ok(op)
+            } else {
+                Err((input.to_owned(), format!("Expected infix operation, found {}", op)))
+            }
+        }), input)
     }
 
     pub fn parse_infix(&self, mut left: Expr, input: &mut &str) -> PResult<Expr> {
@@ -273,10 +291,9 @@ impl Parser {
         loop {
             // If we can't find an infix operator, this means it's not an infix
             // expression, so we can exit.
-            let Some(infix) = self.peek_infix(input) else {
+            let Ok(infix) = self.read_infix(input) else {
                 return Ok(left);
             };
-            real_token(input)?;
 
             // Parse the left part and the infix part (but flipped, as is infix)
             let left_and_infix = Expr::app(Expr::Name(self.de_infix(infix)), left);
@@ -285,7 +302,7 @@ impl Parser {
             let all = self.parse_prefix(left_and_infix, input)?;
 
             // Try to find another infix
-            let Some(next) = self.peek_infix(input) else {
+            let Ok(next) = peek(|input| self.read_infix(input), input) else {
                 return Ok(all);
             };
 
