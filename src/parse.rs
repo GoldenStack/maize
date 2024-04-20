@@ -124,21 +124,19 @@ pub struct Context {
 impl Default for Context {
     fn default() -> Self {
         let mut context = Context::new();
-        context.ra("->");
-        context.ra("^");
-        context.ra("*");
+
+        ["->", "^", "*"]
+            .iter().for_each(|i| context.ra(i));
 
         context.gt("^", "*");
         context.gt("*", "+");
         context.lt("=", "+");
-
         context.lt("::", "->");
-
         context.lt("=", "$");
         context.lt("->", "$");
 
-        let infix = ["=", "^", "*", "+", ",", "->", "::", "$"];
-        context.infix = HashSet::from(infix.map(Into::into));
+        ["=", "^", "*", "+", ",", "->", "::", "$"]
+            .iter().for_each(|i| context.infix(i));
 
         context
     }
