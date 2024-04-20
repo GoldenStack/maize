@@ -1,45 +1,26 @@
 mod ast;
 mod parse;
 
-use crate::parse::Parser;
-
-pub fn default_parser() -> Parser {
-    let mut parser = Parser::new();
-    parser.ra("->");
-    parser.ra("^");
-    parser.ra("*");
-    parser.gt("^", "*");
-    parser.gt("*", "+");
-    parser.lt("=", "+");
-    parser.lt("::", "->");
-    parser.infix("=");
-    parser.infix("^");
-    parser.infix("*");
-    parser.infix("+");
-    parser.infix(",");
-    parser.infix("->");
-    parser.infix("::");
-    parser
-}
+use crate::parse::{parse, Context};
 
 fn main() {
 
     let mut input = "length (pos x y z) = (x ^ 2 + y ^ 2 + z ^ 2) ^ 0.5";
 
-    let parser = default_parser();
+    let context = Context::default();
 
-    let mut input = "example :: Int -> Int -> List Int -> Map (List String)";
-    let mut input = "fst (a, b) = a";
+    let mut input = "example :: Int -> Int -> List Int -> Map $ List String";
+    // let mut input = "fst (a, b) = a";
 
     println!("Parsing:  {}", input);
-    println!("Yields:   {}", parser.parse(&mut input).unwrap());
+    println!("Yields:   {}", parse(&context, &mut input).unwrap());
 }
 
 #[test]
 pub fn test_parsing() {
     use crate::ast::Expr;
 
-    let parser = default_parser();
+    let context = Context::default();
     
     let mut input = "length (pos x y z) = (x ^ 2 + y ^ 2 + z ^ 2) ^ 0.5";
 
@@ -64,7 +45,7 @@ pub fn test_parsing() {
         )
     );
     
-    assert_eq!(parser.parse(&mut input), Ok(expected));
+    assert_eq!(parse(&context, &mut input), Ok(expected));
 
 }
 
@@ -79,11 +60,16 @@ pub fn test_parsing_equality() {
         "fst (a, b) = a",
         "(`=` (fst ((`,` a) b))) a",
     );
+
+    assert_parse(
+        "example :: Int -> Int -> List Int -> Map $ List String",
+        "(`::` example) ((`->` Int) ((`->` Int) ((`->` (List Int)) ((`$` Map) (List String)))))"
+    );
 }
 
 fn assert_parse(mut first: &str, mut second: &str) {
-    let parser = default_parser();
-    assert_eq!(parser.parse(&mut first), parser.parse(&mut second));
+    let context = Context::default();
+    assert_eq!(parse(&context, &mut first), parse(&context, &mut second));
 
     assert_eq!(first.len(), 0);
     assert_eq!(second.len(), 0);
