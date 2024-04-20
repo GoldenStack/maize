@@ -1,6 +1,7 @@
 mod ast;
+mod parse;
 
-use crate::ast::Parser;
+use crate::parse::Parser;
 
 pub fn default_parser() -> Parser {
     let mut parser = Parser::new();
