@@ -3,7 +3,7 @@ use std::fmt::{Debug, Display};
 
 /// A general code expression.
 /// This is the entire initial AST. Yes, it's really this simple.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Hash)]
 pub enum Expr {
     Name(String),
     App(Box<Expr>, Box<Expr>)

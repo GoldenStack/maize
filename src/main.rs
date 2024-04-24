@@ -1,7 +1,8 @@
 mod ast;
 mod parse;
+mod infer;
 
-use crate::parse::{parse, Context};
+use crate::{infer::infer, parse::{parse, Context}};
 
 fn main() {
 
@@ -9,11 +10,14 @@ fn main() {
 
     let context = Context::default();
 
-    let mut input = "example :: Int -> Int -> List Int -> Map $ List String";
+    // let mut input = "example :: Int -> Int -> List Int -> Map $ List String";
     // let mut input = "fst (a, b) = a";
 
     println!("Parsing:  {}", input);
     println!("Yields:   {}", parse(&context, &mut input).unwrap());
+
+
+    println!("{:?}", infer(&parse(&context, &mut "length (pos x y z) = (x ^ 2 + y ^ 2 + z ^ 2) ^ 0.5").unwrap()));
 }
 
 #[test]
