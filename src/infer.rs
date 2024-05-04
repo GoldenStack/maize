@@ -4,6 +4,16 @@ use itertools::Itertools;
 
 use crate::ast::Expr;
 
+pub fn count(expr: &Expr) -> (&Expr, u64) {
+    match expr {
+        Expr::Name(_) => (expr, 0),
+        Expr::App(l, _) => {
+            let c = count(l);
+            (c.0, c.1 + 1)
+        }
+    }
+}
+
 pub fn infer(expr: &Expr) -> () {
 
     let exprs = collect(expr);
@@ -11,34 +21,45 @@ pub fn infer(expr: &Expr) -> () {
     // Assign each expression a type, removing duplicates
     // Technically this just needs to deduplicate equivalent Expr::Name nodes, 
     // as the remaining algorithm will take care of the rest.
-    let identified: HashMap<&Expr, usize> = exprs
+    let mut identified: HashMap<&Expr, usize> = exprs
         .iter()
         .unique()
         .enumerate()
         .map(|(k, v)| (*v, k))
         .collect();
 
-    println!("\nIdentified");
+    let mut graph: HashMap<(usize, u64), usize> = HashMap::new();
+
+    // In "a b" and "a c", "a b" and "a c" have the same type.
+    for expr in exprs.iter() {
+        let (origin, count) = count(expr);
+
+        let Some(origin_id) = identified.get(origin) else { continue };
+
+        if let Some(id) = graph.get(&(*origin_id, count)) {
+            identified.insert(expr, *id);
+        } else {
+            graph.insert((*origin_id, count), *identified.get(expr).unwrap());
+        }
+
+    }
+
+    let mut graph2: HashMap<usize, usize> = HashMap::new();
+
+    // In "a b" and "a c", "b" and "c" have the same type.
+    for expr in exprs.iter() {
+        let Expr::App(l, r) = expr else { continue };
+
+        if let Some(id) = graph2.get(identified.get(l.as_ref()).unwrap()) {
+            identified.insert(r, *id);
+        } else {
+            graph2.insert(*identified.get(l.as_ref()).unwrap(), *identified.get(r.as_ref()).unwrap());
+        }
+    }
+
+    println!("\nInferred types");
     for (k, v) in identified.iter().sorted_by_key(|(_, v)| *v) {
         println!("{}\t :: {}", v, k);
-    }
-
-    let mut graph: HashMap<usize, Vec<usize>> = HashMap::new();
-    
-    // Symmetry: create a graph of applications, and then start with names.
-    for expr in identified.keys() {
-        let Expr::App(l, r) = expr else { continue };
-        let Some(idl) = identified.get(l.as_ref()) else { continue };
-        let Some(idr) = identified.get(r.as_ref()) else { continue };
-        
-        graph.entry(*idl).or_insert_with(Vec::new).push(*idr);
-    }
-
-    let rev_get = |i: &usize| identified.iter().find(|(_, v)| *v == i).map(|(k, _)| k).unwrap();
-
-    println!("\nApps");
-    for (k, v) in graph.iter().sorted_by_key(|(_, v)| *v) {
-        println!("{}\t applied to all of {}", rev_get(k), v.iter().map(|i| rev_get(i)).map(|expr| format!("{}", expr)).collect::<Vec<_>>().join(",   "));
     }
 }
 
