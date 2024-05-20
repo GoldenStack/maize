@@ -1,6 +1,7 @@
 mod ast;
 mod parse;
 mod infer;
+mod test;
 
 use crate::{infer::infer, parse::{parse, Context}};
 
@@ -16,67 +17,14 @@ fn main() {
     println!("Parsing:  {}", input);
     println!("Yields:   {}", parse(&context, &mut input).unwrap());
 
-    println!("{:?}", infer(&parse(&context, &mut "length (pos x y z) = (x ^ 2 + y ^ 2 + 2 ^ z) ^ 2").unwrap()));
+    // println!("{:?}", infer(&parse(&context, &mut "length (pos x y z) = (x ^ 2 + y ^ 2 + 2 ^ z) ^ 2").unwrap()));
+    // println!("{:?}", infer(&parse(&context, &mut "id a, id b").unwrap()));
     // println!("{:?}", infer(&parse(&context, &mut "a b -> a c -> b d -> c e").unwrap()));
     // println!("{:?}", infer(&parse(&context, &mut "a b -> a c -> a d -> b d -> c e -> f a -> f g -> b f").unwrap()));
-    // println!("{:?}", infer(&parse(&context, &mut "a b -> a c -> a d -> b d -> c e -> f a -> f g -> b f").unwrap()));
-}
 
-#[test]
-pub fn test_parsing() {
-    use crate::ast::Expr;
-
-    let context = Context::default();
-    
-    let mut input = "length (pos x y z) = (x ^ 2 + y ^ 2 + z ^ 2) ^ 0.5";
-
-    let expected = Expr::infix(
-        "=".into(),
-        Expr::app(
-            Expr::name("length"),
-            Expr::fold(Expr::name("pos"), [Expr::name("x"), Expr::name("y"), Expr::name("z")])
-        ),
-        Expr::infix(
-            "^".into(),
-            Expr::infix(
-                "+".into(),
-                Expr::raw_infix("^", "x", "2"),
-                Expr::infix(
-                    "+".into(),
-                    Expr::raw_infix("^", "y", "2"),
-                    Expr::raw_infix("^", "z", "2")
-                )
-            ),
-            Expr::name("0.5")
-        )
-    );
-    
-    assert_eq!(parse(&context, &mut input), Ok(expected));
-
-}
-
-#[test]
-pub fn test_parsing_equality() {
-    assert_parse(
-        "a + c d e",
-        "(`+` a) ((c d) e)",
-    );
-
-    assert_parse(
-        "fst (a, b) = a",
-        "(`=` (fst ((`,` a) b))) a",
-    );
-
-    assert_parse(
-        "example :: Int -> Int -> List Int -> Map $ List String",
-        "(`::` example) ((`->` Int) ((`->` Int) ((`->` (List Int)) ((`$` Map) (List String)))))"
-    );
-}
-
-fn assert_parse(mut first: &str, mut second: &str) {
-    let context = Context::default();
-    assert_eq!(parse(&context, &mut first), parse(&context, &mut second));
-
-    assert_eq!(first.len(), 0);
-    assert_eq!(second.len(), 0);
+    // Type inference fails here because `->` takes any type.
+    // Solution: explicit external polymorphism. Functions can only be assumed
+    // to be polymorphic insofar as they have been externally declared as
+    // polymorphic 
+    println!("{:?}", infer(&parse(&context, &mut "a b -> a c -> a d -> b d -> c e -> f a -> f g -> b f").unwrap()));
 }

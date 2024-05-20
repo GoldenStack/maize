@@ -295,10 +295,10 @@ pub fn parse_prefix(context: &Context, mut left: Expr, input: &mut &str) -> PRes
         // If it's right associative relative to the left element we pair it
         // up with the element after it. Otherwise we ignore the element
         // after and allow following loop iterations to handle it.
-        left = Expr::app(left, match order {
+        left = Expr::App(Box::new(left), Box::new(match order {
                 Associativity::Right => parse_prefix(context, right, input)?,
                 Associativity::Left => right
-        });
+        }));
     }
 }
 
@@ -322,7 +322,7 @@ pub fn parse_infix(context: &Context, mut left: Expr, input: &mut &str) -> PResu
         };
 
         // Parse the left part and the infix part (but flipped, as is infix)
-        let left_and_infix = Expr::app(Expr::Name(de_infix(infix)), left);
+        let left_and_infix = Expr::App(Box::new(Expr::Name(de_infix(infix))), Box::new(left));
 
         // Append the right half
         let all = parse_prefix(context, left_and_infix, input)?;

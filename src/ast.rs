@@ -9,6 +9,10 @@ pub enum Expr {
     App(Box<Expr>, Box<Expr>)
 }
 
+/// Associativity rules.
+/// Consider the expression `a b c d`.
+/// Left associative parsing looks like `(((a b) c) d)`, while right associative
+/// parsing looks like `(a (b (c d)))`.
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum Associativity {
     Left, Right
@@ -21,32 +25,4 @@ impl Display for Expr {
             Expr::App(a, b) => write!(f, "({} {})", a, b),
         }
     }
-}
-
-impl Expr {
-
-    pub fn name(name: &str) -> Expr {
-        Expr::Name(name.to_owned())
-    }
-
-    pub fn app(app: Expr, var: Expr) -> Expr {
-        Expr::App(Box::new(app), Box::new(var))
-    }
-
-    pub fn infix(infix: String, left: Expr, right: Expr) -> Expr {
-        Expr::app(Expr::app(Expr::Name(infix), left), right)
-    }
-
-    pub fn raw_infix(infix: &str, left: &str, right: &str) -> Expr {
-        Expr::infix(infix.into(), Expr::name(left), Expr::name(right))
-    }
-
-    pub fn fold<const N: usize>(app: Expr, vars: [Expr; N]) -> Expr {
-        let mut app = app;
-        for var in vars {
-            app = Expr::app(app, var);
-        }
-        app
-    }
-
 }
