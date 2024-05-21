@@ -4,7 +4,17 @@ use daggy::{petgraph::{algo::dijkstra, visit::IntoNodeIdentifiers}, Dag, NodeInd
 
 use crate::ast::{Associativity, Expr};
 
-type PResult<T> = Result<T, (String, String)>;
+type PResult<T> = Result<T, (String, PError)>;
+
+#[derive(Debug, PartialEq)]
+pub enum PError {
+    Expected(String),
+    Unexpected(String),
+    UnexpectedInfix(String),
+    ExpectedInfix(String),
+    EOF,
+    UndefinedAssociativity(String, String),
+}
 
 fn parse_char(input: &mut &str) -> Option<char> {
     let c = input.chars().next()?;
@@ -42,17 +52,17 @@ fn parse_while(predicate: fn(char) -> bool, input: &mut &str) -> Option<String> 
 }
 
 fn require(token: &str, input: &mut &str) -> PResult<()> {
-    ws(input)?;
-    if input.starts_with(token) {
-        *input = &input[token.len()..];
-        Ok(())
-    } else {
-        Err((input.to_string(), format!("Expected '{}'", token)))
-    }
+    read(|input| real_token(input).and_then(|input| {
+        if input == token {
+            Ok(())
+        } else {
+            Err((input.to_string(), PError::Expected(token.into())))
+        }
+    }), input)
 }
 
 fn real_token(input: &mut &str) -> PResult<String> {
-    ws(input)?;
+    parse_while(char::is_whitespace, input);
 
     let standalone = |c: char| c == '(' || c == ')';
     let group = |c: char| c.is_alphanumeric();
@@ -60,11 +70,11 @@ fn real_token(input: &mut &str) -> PResult<String> {
     let never_allowed = |c: char| c.is_whitespace();
 
     let Some(first) = parse_char(input) else {
-        return Err((input.to_string(), format!("Expected a token, found none")));
+        return Err((input.to_string(), PError::EOF));
     };
 
     if never_allowed(first) {
-        return Err((input.to_string(), format!("Expected a token, found invalid character {}", first)));
+        return Err((input.to_string(), PError::Unexpected(first.into())));
     }
 
     if standalone(first) {
@@ -103,11 +113,6 @@ fn real_token(input: &mut &str) -> PResult<String> {
     }
 }
 
-fn ws(input: &mut &str) -> PResult<()> {
-    parse_while(char::is_whitespace, input);
-    Ok(())
-}
-
 pub fn leftmost(expr: &Expr) -> &String {
     match expr {
         Expr::App(a, _) => leftmost(a),
@@ -119,6 +124,7 @@ pub struct Context {
     partial_order: Dag<String, (), u32>,
     self_referential: HashMap<String, Associativity>,
     infix: HashSet<String>,
+    minimum_indentation: u64
 }
 
 impl Default for Context {
@@ -149,6 +155,7 @@ impl Context {
             partial_order: Dag::new(),
             self_referential: HashMap::new(),
             infix: HashSet::new(),
+            minimum_indentation: 0
         }
     }
 
@@ -214,7 +221,7 @@ impl Context {
             (true, false) => Ok(Associativity::Right),
             (false, true) => Ok(Associativity::Left),
             (false, false) => Ok(Associativity::Left),
-            (true, true) => Err((input.to_owned(), format!("Undefined operator associativity between {} and {}", left, right))),
+            (true, true) => Err((input.to_owned(), PError::UndefinedAssociativity(left.into(), right.into()))),
         }
     }
 
@@ -243,6 +250,19 @@ impl Context {
 
         false
     }
+
+    pub fn minimum_indentation(&self) -> u64 {
+        self.minimum_indentation
+    }
+
+    pub fn with_minumum_indentation(&self, minimum: u64) -> Context {
+        Context {
+            partial_order: self.partial_order.clone(),
+            self_referential: self.self_referential.clone(),
+            infix: self.infix.clone(),
+            minimum_indentation: minimum
+        }
+    }
     
 }
 
@@ -250,14 +270,30 @@ pub fn parse_basic(context: &Context, input: &mut &str) -> PResult<Expr> {
     let old_input = &input[0..];
     let token = real_token(input)?;
 
+    if token == ":" {
+        // How to parse:
+        // Repeatedly parse until whitespace is less than current, or until the
+        // end of the file. Ignore failures due to minimum whitespace (as the
+        // minimum should be current + 1) and parse to next.
+        // Set context variable to whitespace of next token.
+        // When parsing: if whitespace is ever less than required, fail.
+        // Integrate this into token parsing.
+        let indentation = 0; // TODO: Replace with indentation of next token.
+
+        let new_context = context.with_minumum_indentation(indentation + 1);
+        
+        println!("{}", input);
+    }
+
     match token.as_str() {
         _ if context.is_infix(&token) => { // Do not allow standalone infixes
             *input = old_input;
-            return Err((input.to_owned(), format!("Expected operation, found infix '{}'", token)));
+            // TODO: I guess not Unexpected??? idk. UnexpectedInfix, ExpectedInfix
+            return Err((input.to_owned(), PError::UnexpectedInfix(token.into())));
         },
         ")" => { // Do not allow standalone closing parentheses
             *input = old_input;
-            return Err((input.to_owned(), "Found closing parentheses".to_owned()));
+            return Err((input.to_owned(), PError::Unexpected(")".into())));
         },
         "(" => { // Parse opening parentheses
             // Allow any expression within them
@@ -269,12 +305,8 @@ pub fn parse_basic(context: &Context, input: &mut &str) -> PResult<Expr> {
                 }
             };
 
-            ws(input)?;
             // Require closing parentheses
-            if let Err(_) = require(")", input) {
-                *input = old_input;
-                return Err((input.to_owned(), "Expected closing parentheses".to_owned()));
-            }
+            require(")", input)?;
 
             return Ok(infix);
         },
@@ -307,7 +339,7 @@ fn read_infix(context: &Context, input: &mut &str) -> PResult<String> {
         if context.is_infix(&op) && op != ")" {
             Ok(op)
         } else {
-            Err((input.to_owned(), format!("Expected infix operation, found {}", op)))
+            Err((input.to_owned(), PError::ExpectedInfix(op.into())))
         }
     }), input)
 }
