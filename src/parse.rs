@@ -16,33 +16,65 @@ pub enum PError {
     UndefinedAssociativity(String, String),
 }
 
-fn parse_char(input: &mut &str) -> Option<char> {
-    let c = input.chars().next()?;
-    let offset = c.len_utf8();
-    *input = &input[offset..];
-    Some(c)
+#[derive(Debug)]
+pub struct Reader<'a> {
+    source: &'a str,
+    pos: usize,
 }
 
-fn peek<T, F: Fn(&mut &str) -> T>(function: F, input: &&str) -> T {
-    let copy = &mut &input[0..];
-    return function(copy);
+impl<'a> Clone for Reader<'a> {
+    fn clone(&self) -> Self {
+        Reader::new(&self.source)
+    }
 }
 
-fn read<T, E, F: Fn(&mut &str) -> Result<T, E>>(function: F, input: &mut &str) -> Result<T, E> {
-    let old = &mut &input[0..];
-    let result = function(input);
-    if result.is_err() { *input = old; }
-    return result;
+impl<'a> Reader<'a> {
+
+    pub fn new(source: &'a str) -> Self {
+        Reader {
+            source,
+            pos: 0
+        }
+    }
+
+    pub fn slice(&self) -> &'a str {
+        self.source
+    }
+
+    pub fn next(&mut self) -> Option<char> {
+        let c = self.source.chars().next()?;
+        let offset = c.len_utf8();
+        self.source = &self.source[offset..];
+        Some(c)
+    }
+
+    pub fn peek<T, F: Fn(&mut Reader) -> T>(&self, function: F) -> T {
+        let copy = &mut self.clone();
+        let result = function(copy);
+        return result;
+    }
+
+    pub fn read<T, F: Fn(&mut Reader) -> PResult<T>>(&mut self, function: F) -> PResult<T> {
+        let copy = self.clone();
+        let result = function(self);
+        if result.is_err() { *self = copy; }
+        return result;
+    }
+
+    pub fn err<T>(&self, error: PError) -> PResult<T> {
+        Err((self.source.to_owned(), error))
+    }
+
 }
 
-fn parse_while(predicate: fn(char) -> bool, input: &mut &str) -> Option<String> {
+fn parse_while(predicate: fn(char) -> bool, input: &mut Reader) -> Option<String> {
     let mut str = String::new();
 
     loop {
-        if let Some(char) = input.chars().next() {
+        if let Some(char) = input.peek(|i| i.next()) {
             if predicate(char) {
                 str.push(char);
-                parse_char(input);
+                input.next();
                 continue;
             }
         }
@@ -51,17 +83,17 @@ fn parse_while(predicate: fn(char) -> bool, input: &mut &str) -> Option<String> 
     }
 }
 
-fn require(token: &str, input: &mut &str) -> PResult<()> {
-    read(|input| real_token(input).and_then(|input| {
+fn require(token: &str, input: &mut Reader) -> PResult<()> {
+    input.read(|input| real_token(input).and_then(|input| {
         if input == token {
             Ok(())
         } else {
             Err((input.to_string(), PError::Expected(token.into())))
         }
-    }), input)
+    }))
 }
 
-fn real_token(input: &mut &str) -> PResult<String> {
+fn real_token(input: &mut Reader) -> PResult<String> {
     parse_while(char::is_whitespace, input);
 
     let standalone = |c: char| c == '(' || c == ')';
@@ -69,12 +101,12 @@ fn real_token(input: &mut &str) -> PResult<String> {
     let always_allowed = |c: char| c == '`' || c == '\'' || c == '.';
     let never_allowed = |c: char| c.is_whitespace();
 
-    let Some(first) = parse_char(input) else {
-        return Err((input.to_string(), PError::EOF));
+    let Some(first) = input.next() else {
+        return input.err(PError::EOF);
     };
 
     if never_allowed(first) {
-        return Err((input.to_string(), PError::Unexpected(first.into())));
+        return input.err(PError::Unexpected(first.into()));
     }
 
     if standalone(first) {
@@ -90,7 +122,7 @@ fn real_token(input: &mut &str) -> PResult<String> {
     };
 
     loop {
-        if let Some(char) = input.chars().next() {
+        if let Some(char) = input.peek(|i| i.next()) {
             if standalone(char) || never_allowed(char) {
                 return Ok(str);
             }
@@ -106,7 +138,7 @@ fn real_token(input: &mut &str) -> PResult<String> {
             }
 
             str.push(char);
-            parse_char(input);
+            input.next();
             continue;
         }
         return Ok(str);
@@ -212,7 +244,7 @@ impl Context {
     /// default values: prefix expressions bind stronger than infix expressions,
     /// prefix operators bind to the left by default, and infix expressions have
     /// no default associativity.
-    pub fn get_associativity(&self, left: &str, right: &str, input: &str) -> PResult<Associativity> {
+    pub fn get_associativity(&self, left: &str, right: &str, input: &Reader) -> PResult<Associativity> {
         if let Some(defined) = self.get_defined_associativity(left, right) {
             return Ok(defined);
         }
@@ -221,7 +253,7 @@ impl Context {
             (true, false) => Ok(Associativity::Right),
             (false, true) => Ok(Associativity::Left),
             (false, false) => Ok(Associativity::Left),
-            (true, true) => Err((input.to_owned(), PError::UndefinedAssociativity(left.into(), right.into()))),
+            (true, true) => input.err(PError::UndefinedAssociativity(left.into(), right.into())),
         }
     }
 
@@ -266,8 +298,8 @@ impl Context {
     
 }
 
-pub fn parse_basic(context: &Context, input: &mut &str) -> PResult<Expr> {
-    let old_input = &input[0..];
+pub fn parse_basic(context: &Context, input: &mut Reader) -> PResult<Expr> {
+    let old_input = input.clone();
     let token = real_token(input)?;
 
     if token == ":" {
@@ -282,18 +314,18 @@ pub fn parse_basic(context: &Context, input: &mut &str) -> PResult<Expr> {
 
         let new_context = context.with_minumum_indentation(indentation + 1);
         
-        println!("{}", input);
+        // println!("{}", input);
     }
 
     match token.as_str() {
         _ if context.is_infix(&token) => { // Do not allow standalone infixes
             *input = old_input;
             // TODO: I guess not Unexpected??? idk. UnexpectedInfix, ExpectedInfix
-            return Err((input.to_owned(), PError::UnexpectedInfix(token.into())));
+            return input.err(PError::UnexpectedInfix(token.into()));
         },
         ")" => { // Do not allow standalone closing parentheses
             *input = old_input;
-            return Err((input.to_owned(), PError::Unexpected(")".into())));
+            return input.err(PError::Unexpected(")".into()));
         },
         "(" => { // Parse opening parentheses
             // Allow any expression within them
@@ -314,7 +346,7 @@ pub fn parse_basic(context: &Context, input: &mut &str) -> PResult<Expr> {
     }
 }
 
-pub fn parse_prefix(context: &Context, mut left: Expr, input: &mut &str) -> PResult<Expr> {
+pub fn parse_prefix(context: &Context, mut left: Expr, input: &mut Reader) -> PResult<Expr> {
     loop {
         // If there isn't another basic expression, this means it's not a
         // prefix operation, so we can exit.
@@ -334,17 +366,17 @@ pub fn parse_prefix(context: &Context, mut left: Expr, input: &mut &str) -> PRes
     }
 }
 
-fn read_infix(context: &Context, input: &mut &str) -> PResult<String> {
-    read(|input| real_token(input).and_then(|op| {
+fn read_infix(context: &Context, input: &mut Reader) -> PResult<String> {
+    input.read(|input| real_token(input).and_then(|op| {
         if context.is_infix(&op) && op != ")" {
             Ok(op)
         } else {
-            Err((input.to_owned(), PError::ExpectedInfix(op.into())))
+            input.err(PError::ExpectedInfix(op.into()))
         }
-    }), input)
+    }))
 }
 
-pub fn parse_infix(context: &Context, mut left: Expr, input: &mut &str) -> PResult<Expr> {
+pub fn parse_infix(context: &Context, mut left: Expr, input: &mut Reader) -> PResult<Expr> {
 
     loop {
         // If we can't find an infix operator, this means it's not an infix
@@ -360,7 +392,7 @@ pub fn parse_infix(context: &Context, mut left: Expr, input: &mut &str) -> PResu
         let all = parse_prefix(context, left_and_infix, input)?;
 
         // Try to find another infix
-        let Ok(next) = peek(|input| read_infix(context, input), input) else {
+        let Ok(next) = input.peek(|input| read_infix(context, input)) else {
             return Ok(all);
         };
 
@@ -382,7 +414,7 @@ pub fn parse_infix(context: &Context, mut left: Expr, input: &mut &str) -> PResu
     }
 }
 
-pub fn parse(context: &Context, input: &mut &str) -> PResult<Expr> {
+pub fn parse(context: &Context, input: &mut Reader) -> PResult<Expr> {
     // Parsing occurs down the parse tree:
     // Infix -> Prefix -> Basic
 

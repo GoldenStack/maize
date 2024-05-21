@@ -1,5 +1,5 @@
 
-use crate::{ast::Expr, parse::{Context, parse}};
+use crate::{ast::Expr, parse::{parse, Context, Reader}};
 
 pub fn name(name: &str) -> Expr {
     Expr::Name(name.to_owned())
@@ -29,7 +29,8 @@ pub fn fold<const N: usize>(app_expr: Expr, vars: [Expr; N]) -> Expr {
 pub fn test_parsing() {
     let context = Context::default();
     
-    let mut input = "length (pos x y z) = (x ^ 2 + y ^ 2 + z ^ 2) ^ 0.5";
+    let input = "length (pos x y z) = (x ^ 2 + y ^ 2 + z ^ 2) ^ 0.5";
+    let mut input = Reader::new(input);
 
     let expected = infix(
         "=".into(),
@@ -76,8 +77,9 @@ pub fn test_parsing_equality() {
 
 fn assert_parse(mut first: &str, mut second: &str) {
     let context = Context::default();
-    assert_eq!(parse(&context, &mut first), parse(&context, &mut second));
+    let (mut f, mut s) = (Reader::new(first), Reader::new(second));
+    assert_eq!(parse(&context, &mut f), parse(&context, &mut s));
 
-    assert_eq!(first.len(), 0);
-    assert_eq!(second.len(), 0);
+    assert_eq!(f.slice().len(), 0);
+    assert_eq!(s.slice().len(), 0);
 }

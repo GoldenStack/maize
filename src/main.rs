@@ -3,18 +3,34 @@ mod parse;
 mod infer;
 mod test;
 
-use crate::{infer::infer, parse::{parse, Context}};
+use crate::{infer::infer, parse::{parse, Context, Reader}};
 
 fn main() {
 
-    let mut input = "length (pos x y z) = (x ^ 2 + y ^ 2 + z ^ 2) ^ 0.5";
+    // let mut input = "length (pos x y z) = (x ^ 2 + y ^ 2 + z ^ 2) ^ 0.5";
+    // let mut input = r"
+    // pos = (id Pos):
+    //     x :: 5
+    //     y :: 7
+    // ";
+    let mut input = r"
+module 'Main' where:
 
-    let context = Context::default();
+name = 5
+ + 2
+
+age = 6
+
+";
+
+    let context = Context::default().with_minumum_indentation(5);
+
+    let mut input = Reader::new(input);
 
     // let mut input = "example :: Int -> Int -> List Int -> Map $ List String";
     // let mut input = "fst (a, b) = a";
 
-    println!("Parsing:  {}", input);
+    println!("Parsing:  {:?}", input);
     println!("Yields:   {}", parse(&context, &mut input).unwrap());
 
     // println!("{:?}", infer(&parse(&context, &mut "length (pos x y z) = (x ^ 2 + y ^ 2 + 2 ^ z) ^ 2").unwrap()));
@@ -26,5 +42,5 @@ fn main() {
     // Solution: explicit external polymorphism. Functions can only be assumed
     // to be polymorphic insofar as they have been externally declared as
     // polymorphic 
-    println!("{:?}", infer(&parse(&context, &mut "a b -> a c -> a d -> b d -> c e -> f a -> f g -> b f").unwrap()));
+    // println!("{:?}", infer(&parse(&context, &mut "a b -> a c -> a d -> b d -> c e -> f a -> f g -> b f").unwrap()));
 }
