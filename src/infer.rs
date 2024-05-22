@@ -4,6 +4,12 @@ use itertools::Itertools;
 
 use crate::ast::Expr;
 
+/// Counts the number of applications the given expression is, returning the
+/// base expression and the count.
+/// 
+/// Expressions are binary trees, so expressions can be considered to have a
+/// "leftmost" term. The "base expression" is this leftmost term, and the
+/// "count" is the depth of this term, based on the original expression.
 pub fn count_applications(expr: &Expr) -> (&Expr, u64) {
     match expr {
         Expr::Name(_) => (expr, 0),
@@ -14,6 +20,47 @@ pub fn count_applications(expr: &Expr) -> (&Expr, u64) {
     }
 }
 
+/// Performs a single pass of type inference over the provided typed
+/// expressions, returning a list of pairs of types that are equal.
+/// 
+/// The two inference rules are as follows:
+/// - Return type equality:
+///     In the expressions "a b" and "a c", "a b" and "a c" have the same type.
+/// - Parameter type equality:
+///     In the expressions "a b" and "a c", "b" and "c" have the same type.
+/// 
+/// Importantly, these rules apply for separate expressions with the same type,
+/// not just the same expression being applied twice.
+/// 
+/// These rules are all that is required for most general type inference.
+/// 
+/// Although this works for most common expressions, this algorithm is known to
+/// have issues with polymorphic functions, which can function as generics or
+/// templates, terms you may know from other languages.
+/// It cannot correctly infer them because the definitions of these polymorphic
+/// functions are unknown until the types of parameters provided to them are
+/// known, because the types of the functions are functions themselves.
+/// 
+/// Take the identity operator, for example.
+/// ```Maize
+/// id a = a
+/// ```
+/// This has no type requirements, and is polymorphic to every type. Thus, type
+/// inference over usages of it, utilizing the algorithm explained prior, make
+/// incorrect assumptions about it. Two separate usages of the identity function
+/// will be assumed to have equal parameter types, as well as equal results.
+/// ```Maize
+/// (id a) (id b)
+/// ```
+/// In the code segment above, `a` and `b` are assumed to have equal types,
+/// because they are both the result of applying one argument to the identity
+/// function. This is an incorrect assumption. Furthermore, `(id a)` and
+/// `(id b)` are assumed to have the same type, which is also incorrect. Their
+/// true types cannot be known until the types of `a` and `b` are known.
+/// 
+/// Polymorphic functions break both of the core rules used in the algorithm, so
+/// it is impossible to make any assumptions about types from their usages.
+/// 
 pub fn infer_once(types: &HashMap<&Expr, usize>) -> Vec<(usize, usize)> {
     // List of types that we know are equal.
     let mut relations: Vec<(usize, usize)> = Vec::new();
@@ -61,6 +108,12 @@ pub fn infer_once(types: &HashMap<&Expr, usize>) -> Vec<(usize, usize)> {
     relations
 } 
 
+/// Performs as many inference passes over the provided types as is necessary.
+/// This modifies the provided map in-place to indicate which types are equal
+/// by modifying the keys of the map.
+/// 
+/// Inference passes stop when no more inferences are made than the last
+/// iteration.
 pub fn infer_many(types: &mut HashMap<&Expr, usize>) {
     loop {
         let relations = infer_once(types);
@@ -83,6 +136,10 @@ pub fn infer_many(types: &mut HashMap<&Expr, usize>) {
     }
 }
 
+/// Assigns an arbitrary type number to each sub-expression (subtree) of the
+/// given expression.
+/// The numbers are meaningless, except for that subtrees with equal type
+/// numbers are assumed to have equal types.
 pub fn infer(expr: &Expr) -> HashMap<&Expr, usize> {
     // Assign each expression a type, removing duplicates.
     // Technically, this doesn't need to deduplicate equivalent nodes as the
@@ -110,12 +167,15 @@ pub fn infer(expr: &Expr) -> HashMap<&Expr, usize> {
     types
 }
 
+/// Collects all subtrees of the provided expression into a list.
 fn collect<'a>(expr: &'a Expr) -> Vec<&'a Expr> {
     let mut vec = Vec::new();
     collect_into(expr, &mut vec);
     vec
 }
 
+/// Collects all subtrees of the provided expression into the provided list.
+/// This is used internally in [collect].
 fn collect_into<'a>(expr: &'a Expr, vec: &mut Vec<&'a Expr>) {
     vec.push(expr);
     match expr {
