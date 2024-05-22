@@ -14,17 +14,23 @@ pub enum PError {
     ExpectedInfix(String),
     EOF,
     UndefinedAssociativity(String, String),
+    ExpectedIndentation(usize)
 }
 
 #[derive(Debug)]
 pub struct Reader<'a> {
     source: &'a str,
     pos: usize,
+    min_indent: usize
 }
 
 impl<'a> Clone for Reader<'a> {
     fn clone(&self) -> Self {
-        Reader::new(&self.source)
+        Reader {
+            source: &self.source,
+            pos: self.pos,
+            min_indent: self.min_indent,
+        }
     }
 }
 
@@ -33,18 +39,26 @@ impl<'a> Reader<'a> {
     pub fn new(source: &'a str) -> Self {
         Reader {
             source,
-            pos: 0
+            pos: 0,
+            min_indent: 0
         }
     }
 
+    pub fn min_indent(&self) -> usize {
+        self.min_indent
+    }
+
+    pub fn set_min_indent(&mut self, min_indent: usize) {
+        self.min_indent = min_indent;
+    }
+
     pub fn slice(&self) -> &'a str {
-        self.source
+        &self.source[self.pos..]
     }
 
     pub fn next(&mut self) -> Option<char> {
-        let c = self.source.chars().next()?;
-        let offset = c.len_utf8();
-        self.source = &self.source[offset..];
+        let c = self.slice().chars().next()?;
+        self.pos += c.len_utf8();
         Some(c)
     }
 
@@ -62,39 +76,53 @@ impl<'a> Reader<'a> {
     }
 
     pub fn err<T>(&self, error: PError) -> PResult<T> {
-        Err((self.source.to_owned(), error))
+        Err((self.slice().to_owned(), error))
     }
 
 }
 
-fn parse_while(predicate: fn(char) -> bool, input: &mut Reader) -> Option<String> {
-    let mut str = String::new();
+fn whitespace(input: &mut Reader) -> PResult<usize> {
+    let mut has_break = false;
+    let mut ws = 0;
+
+    let start = input.clone();
 
     loop {
         if let Some(char) = input.peek(|i| i.next()) {
-            if predicate(char) {
-                str.push(char);
+            if char.is_whitespace() {
+                if char == '\n' {
+                    ws = 0;
+                    has_break = true;
+                } else {
+                    ws += 1;
+                }
+
                 input.next();
                 continue;
             }
         }
 
-        return if str.is_empty() { None } else { Some(str) };
+        if !has_break || ws >= input.min_indent() {
+            return Ok(ws)
+        } else {
+            *input = start;
+            return input.err(PError::ExpectedIndentation(input.min_indent()))
+        }
     }
 }
 
 fn require(token: &str, input: &mut Reader) -> PResult<()> {
-    input.read(|input| real_token(input).and_then(|input| {
-        if input == token {
+    input.read(|input| real_token(input).and_then(|t| {
+        if t == token {
             Ok(())
         } else {
-            Err((input.to_string(), PError::Expected(token.into())))
+            input.err(PError::Expected(token.into()))
         }
     }))
 }
 
 fn real_token(input: &mut Reader) -> PResult<String> {
-    parse_while(char::is_whitespace, input);
+    whitespace(input)?;
 
     let standalone = |c: char| c == '(' || c == ')';
     let group = |c: char| c.is_alphanumeric();
@@ -156,7 +184,6 @@ pub struct Context {
     partial_order: Dag<String, (), u32>,
     self_referential: HashMap<String, Associativity>,
     infix: HashSet<String>,
-    minimum_indentation: u64
 }
 
 impl Default for Context {
@@ -172,8 +199,11 @@ impl Default for Context {
         context.lt("::", "->");
         context.lt("=", "$");
         context.lt("->", "$");
+        context.gt(":", "=");
+        context.gt(":", "::");
+        context.gt("==", "=");
 
-        ["=", "^", "*", "+", ",", "->", "::", "$"]
+        ["=", "^", "*", "+", ",", "->", "::", "$", ":", "=="]
             .iter().for_each(|i| context.infix(i));
 
         context
@@ -186,8 +216,7 @@ impl Context {
         Context {
             partial_order: Dag::new(),
             self_referential: HashMap::new(),
-            infix: HashSet::new(),
-            minimum_indentation: 0
+            infix: HashSet::new()
         }
     }
 
@@ -282,40 +311,12 @@ impl Context {
 
         false
     }
-
-    pub fn minimum_indentation(&self) -> u64 {
-        self.minimum_indentation
-    }
-
-    pub fn with_minumum_indentation(&self, minimum: u64) -> Context {
-        Context {
-            partial_order: self.partial_order.clone(),
-            self_referential: self.self_referential.clone(),
-            infix: self.infix.clone(),
-            minimum_indentation: minimum
-        }
-    }
     
 }
 
 pub fn parse_basic(context: &Context, input: &mut Reader) -> PResult<Expr> {
     let old_input = input.clone();
     let token = real_token(input)?;
-
-    if token == ":" {
-        // How to parse:
-        // Repeatedly parse until whitespace is less than current, or until the
-        // end of the file. Ignore failures due to minimum whitespace (as the
-        // minimum should be current + 1) and parse to next.
-        // Set context variable to whitespace of next token.
-        // When parsing: if whitespace is ever less than required, fail.
-        // Integrate this into token parsing.
-        let indentation = 0; // TODO: Replace with indentation of next token.
-
-        let new_context = context.with_minumum_indentation(indentation + 1);
-        
-        // println!("{}", input);
-    }
 
     match token.as_str() {
         _ if context.is_infix(&token) => { // Do not allow standalone infixes
@@ -376,6 +377,46 @@ fn read_infix(context: &Context, input: &mut Reader) -> PResult<String> {
     }))
 }
 
+pub fn indentation(input: &Reader) -> usize {
+    let next_token_start = input.pos;
+    let last_line_break = input.source[0..input.pos].rfind("\n")
+        .map(|n| n + 1)
+        .unwrap_or(input.slice().len());
+
+    next_token_start - last_line_break
+}
+
+pub fn parse_indented_block(context: &Context, mut left: Expr, input: &mut Reader) -> PResult<Expr> {
+
+    let mut copy = input.clone();
+    whitespace(&mut copy)?;
+    let indentation = indentation(&copy);
+
+    let previous_indentation = input.min_indent();
+
+    loop {
+        input.set_min_indent(indentation);
+        if whitespace(input).is_err() {
+            return Ok(left);
+        }
+
+        input.set_min_indent(indentation + 1);
+        let parsed = match parse(context, input) {
+            Ok(expr) => expr,
+            Err(err) => {
+                return match err.1 {
+                    PError::EOF | PError::ExpectedIndentation(_) => Ok(left),
+                    _ => Err(err)
+                };
+            }
+        };
+
+        input.set_min_indent(previous_indentation);
+
+        left = Expr::App(Box::new(left), Box::new(parsed));
+    }
+}
+
 pub fn parse_infix(context: &Context, mut left: Expr, input: &mut Reader) -> PResult<Expr> {
 
     loop {
@@ -384,6 +425,10 @@ pub fn parse_infix(context: &Context, mut left: Expr, input: &mut Reader) -> PRe
         let Ok(infix) = read_infix(context, input) else {
             return Ok(left);
         };
+
+        if infix == ":" {
+            return parse_indented_block(context, left, input);
+        }
 
         // Parse the left part and the infix part (but flipped, as is infix)
         let left_and_infix = Expr::App(Box::new(Expr::Name(de_infix(infix))), Box::new(left));

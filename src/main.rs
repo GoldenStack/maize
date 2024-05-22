@@ -6,24 +6,16 @@ mod test;
 use crate::{infer::infer, parse::{parse, Context, Reader}};
 
 fn main() {
+    // std::env::set_var("RUST_BACKTRACE", "1");
 
-    // let mut input = "length (pos x y z) = (x ^ 2 + y ^ 2 + z ^ 2) ^ 0.5";
-    // let mut input = r"
-    // pos = (id Pos):
-    //     x :: 5
-    //     y :: 7
-    // ";
-    let mut input = r"
-module 'Main' where:
+    // let input = "length (pos x y z) = (x ^ 2 + y ^ 2 + z ^ 2) ^ 0.5";
+    let input = r"
+    pos = (id Pos):
+        x :: 5
+        y :: 7
+    ";
 
-name = 5
- + 2
-
-age = 6
-
-";
-
-    let context = Context::default().with_minumum_indentation(5);
+    let context = Context::default();
 
     let mut input = Reader::new(input);
 

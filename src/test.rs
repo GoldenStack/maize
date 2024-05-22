@@ -75,11 +75,52 @@ pub fn test_parsing_equality() {
     );
 }
 
-fn assert_parse(mut first: &str, mut second: &str) {
+#[test]
+pub fn test_block_operator() {
+    assert_parse(
+        "
+        pos = (id Pos):
+          x :: 5
+          y :: 7",
+        "((`=` pos) (((id Pos) ((`::` x) 5)) ((`::` y) 7)))"
+    );
+
+    assert_parse(r#"
+        module Main where:
+
+        seven = 5
+         + 2
+        true = 5 == 5
+
+        map = Map:
+            name = "oven"
+            example :: Bool
+            example = True"#,
+    r#"(((((module Main) where) ((`=` seven) ((`+` 5) 2))) ((`=` true) ((`==` 5) 5))) ((`=` map) (((Map ((`=` name) "oven")) ((`::` example) Bool)) ((`=` example) True))))"#);
+
+    assert_parse_rem(r#"
+    A:
+     B:
+      C:
+       D: H
+          I
+           J
+          K
+       D2:L
+    Unread
+    "#, 16,
+    "(A (B ((C (((D H) (I J)) K)) (D2 L))))", 0);
+}
+
+fn assert_parse(first: &str, second: &str) {
+    assert_parse_rem(first, 0, second, 0);
+}
+
+fn assert_parse_rem(first: &str, first_len: usize, second: &str, second_len: usize) {
     let context = Context::default();
     let (mut f, mut s) = (Reader::new(first), Reader::new(second));
     assert_eq!(parse(&context, &mut f), parse(&context, &mut s));
 
-    assert_eq!(f.slice().len(), 0);
-    assert_eq!(s.slice().len(), 0);
+    assert_eq!(f.slice().len(), first_len);
+    assert_eq!(s.slice().len(), second_len);
 }
