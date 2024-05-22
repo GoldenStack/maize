@@ -34,5 +34,5 @@ fn main() {
     // Solution: explicit external polymorphism. Functions can only be assumed
     // to be polymorphic insofar as they have been externally declared as
     // polymorphic 
-    // println!("{:?}", infer(&parse(&context, &mut "a b -> a c -> a d -> b d -> c e -> f a -> f g -> b f").unwrap()));
+    println!("{:?}", infer(&parse(&context, &mut Reader::new("a b -> a c -> a d -> b d -> c e -> f a -> f g -> b f")).unwrap()));
 }

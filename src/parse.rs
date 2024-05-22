@@ -4,19 +4,39 @@ use daggy::{petgraph::{algo::dijkstra, visit::IntoNodeIdentifiers}, Dag, NodeInd
 
 use crate::ast::{Associativity, Expr};
 
+/// A result from parsing an expression.
+/// This contains either the parameterized type `<T>` or the remaining portion
+/// of the input string along with an error that occurred.
 type PResult<T> = Result<T, (String, PError)>;
 
+/// An error that occurred while parsing.
 #[derive(Debug, PartialEq)]
 pub enum PError {
+    /// Expected the given string at this location, but did not find it.
     Expected(String),
+
+    /// Did not expect the given string at this location, but found it.
     Unexpected(String),
+
+    /// Did not expect an infix expression at this location, but found one.
     UnexpectedInfix(String),
-    ExpectedInfix(String),
+
+    /// Could not parse due to reaching the end of the string.
     EOF,
+
+    /// Associativity between the two provided operators is undefined.
     UndefinedAssociativity(String, String),
+
+    /// Expected a specified amount of indentation, but did not find it.
     ExpectedIndentation(usize)
 }
 
+/// A string reader, containing the source string, a position in the source
+/// string, and the minimum indent size.
+/// 
+/// The reader stores dynamic information about parsing. It's meant to be cheap
+/// and copyable.
+/// More expensive, static information is stored in the [Context] instance.
 #[derive(Debug)]
 pub struct Reader<'a> {
     source: &'a str,
@@ -68,14 +88,12 @@ impl<'a> Reader<'a> {
         return result;
     }
 
-    pub fn read<T, F: Fn(&mut Reader) -> PResult<T>>(&mut self, function: F) -> PResult<T> {
-        let copy = self.clone();
-        let result = function(self);
-        if result.is_err() { *self = copy; }
-        return result;
-    }
-
     pub fn err<T>(&self, error: PError) -> PResult<T> {
+        Err((self.slice().to_owned(), error))
+    }
+    
+    pub fn err_reset<T>(&mut self, other: Reader<'a>, error: PError) -> PResult<T> {
+        *self = other;
         Err((self.slice().to_owned(), error))
     }
 
@@ -105,20 +123,9 @@ fn whitespace(input: &mut Reader) -> PResult<usize> {
         if !has_break || ws >= input.min_indent() {
             return Ok(ws)
         } else {
-            *input = start;
-            return input.err(PError::ExpectedIndentation(input.min_indent()))
+            return input.err_reset(start, PError::ExpectedIndentation(input.min_indent()))
         }
     }
-}
-
-fn require(token: &str, input: &mut Reader) -> PResult<()> {
-    input.read(|input| real_token(input).and_then(|t| {
-        if t == token {
-            Ok(())
-        } else {
-            input.err(PError::Expected(token.into()))
-        }
-    }))
 }
 
 fn real_token(input: &mut Reader) -> PResult<String> {
@@ -319,15 +326,12 @@ pub fn parse_basic(context: &Context, input: &mut Reader) -> PResult<Expr> {
     let token = real_token(input)?;
 
     match token.as_str() {
-        _ if context.is_infix(&token) => { // Do not allow standalone infixes
-            *input = old_input;
-            // TODO: I guess not Unexpected??? idk. UnexpectedInfix, ExpectedInfix
-            return input.err(PError::UnexpectedInfix(token.into()));
-        },
-        ")" => { // Do not allow standalone closing parentheses
-            *input = old_input;
-            return input.err(PError::Unexpected(")".into()));
-        },
+        // Do not allow standalone infixes
+        _ if context.is_infix(&token) => input.err_reset(old_input, PError::UnexpectedInfix(token.into())),
+
+        // Do not allow standalone closing parentheses
+        ")" => input.err_reset(old_input, PError::Unexpected(")".into())),
+
         "(" => { // Parse opening parentheses
             // Allow any expression within them
             let infix = match parse(context, input) {
@@ -339,11 +343,16 @@ pub fn parse_basic(context: &Context, input: &mut Reader) -> PResult<Expr> {
             };
 
             // Require closing parentheses
-            require(")", input)?;
+            let copy = input.clone();
 
-            return Ok(infix);
+            match real_token(input) {
+                Ok(t) if t == ")" => Ok(infix),
+                _ => input.err_reset(copy, PError::Expected(")".into())),
+            }
         },
-        _ => Ok(Expr::Name(de_infix(token))), // Otherwise it's a named token
+
+        // Otherwise it's a named token
+        _ => Ok(Expr::Name(de_infix(token))),
     }
 }
 
@@ -367,23 +376,25 @@ pub fn parse_prefix(context: &Context, mut left: Expr, input: &mut Reader) -> PR
     }
 }
 
-fn read_infix(context: &Context, input: &mut Reader) -> PResult<String> {
-    input.read(|input| real_token(input).and_then(|op| {
-        if context.is_infix(&op) && op != ")" {
-            Ok(op)
-        } else {
-            input.err(PError::ExpectedInfix(op.into()))
-        }
-    }))
+fn read_infix(context: &Context, input: &mut Reader) -> Option<String> {
+    let copy = input.clone();
+
+    let token = real_token(input).ok().filter(|op| context.is_infix(op));
+
+    // Revert progress
+    if token.is_none() {
+        *input = copy;
+    }
+
+    token
 }
 
 pub fn indentation(input: &Reader) -> usize {
-    let next_token_start = input.pos;
-    let last_line_break = input.source[0..input.pos].rfind("\n")
-        .map(|n| n + 1)
-        .unwrap_or(input.slice().len());
+    let last_line_break = input.source[0..input.pos].rfind("\n") // Find a line break
+        .map(|n| n + 1) // Take the character after it, if there is one
+        .unwrap_or(input.pos); // Otherwise, just take the length of the entire string
 
-    next_token_start - last_line_break
+    input.pos - last_line_break
 }
 
 pub fn parse_indented_block(context: &Context, mut left: Expr, input: &mut Reader) -> PResult<Expr> {
@@ -422,7 +433,7 @@ pub fn parse_infix(context: &Context, mut left: Expr, input: &mut Reader) -> PRe
     loop {
         // If we can't find an infix operator, this means it's not an infix
         // expression, so we can exit.
-        let Ok(infix) = read_infix(context, input) else {
+        let Some(infix) = read_infix(context, input) else {
             return Ok(left);
         };
 
@@ -437,7 +448,7 @@ pub fn parse_infix(context: &Context, mut left: Expr, input: &mut Reader) -> PRe
         let all = parse_prefix(context, left_and_infix, input)?;
 
         // Try to find another infix
-        let Ok(next) = input.peek(|input| read_infix(context, input)) else {
+        let Some(next) = input.peek(|input| read_infix(context, input)) else {
             return Ok(all);
         };
 
