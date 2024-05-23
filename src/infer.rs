@@ -168,7 +168,7 @@ pub fn infer(expr: &Expr) -> HashMap<&Expr, usize> {
 }
 
 /// Collects all subtrees of the provided expression into a list.
-fn collect<'a>(expr: &'a Expr) -> Vec<&'a Expr> {
+pub fn collect<'a>(expr: &'a Expr) -> Vec<&'a Expr> {
     let mut vec = Vec::new();
     collect_into(expr, &mut vec);
     vec

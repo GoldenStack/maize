@@ -1,7 +1,8 @@
 use core::fmt;
 use std::fmt::{Debug, Display};
 
-/// A general code expression.
+/// A code expression in Maize.
+/// 
 /// An expression is either a string literal ("Name"), or an application of one
 /// expression to another ("App").
 /// 
@@ -16,6 +17,7 @@ pub enum Expr {
 }
 
 /// Associativity rules.
+/// 
 /// Consider the expression `a b c d`.
 /// Left associative parsing looks like `(((a b) c) d)`, while right associative
 /// parsing looks like `(a (b (c d)))`.
@@ -25,6 +27,7 @@ pub enum Associativity {
 }
 
 /// Displays an expression.
+/// 
 /// `Name` types just return the name, while `App` types return stringified
 /// forms of the arguments, surrounded by paretheses.
 impl Display for Expr {

@@ -9,11 +9,12 @@ fn main() {
     // std::env::set_var("RUST_BACKTRACE", "1");
 
     // let input = "length (pos x y z) = (x ^ 2 + y ^ 2 + z ^ 2) ^ 0.5";
-    let input = r"
-    pos = (id Pos):
-        x :: 5
-        y :: 7
-    ";
+    // let input = r"
+    // pos = (id Pos):
+    //     x :: 5
+    //     y :: 7
+    // ";
+    let input = "(1 +)";
 
     let context = Context::default();
 
@@ -34,5 +35,5 @@ fn main() {
     // Solution: explicit external polymorphism. Functions can only be assumed
     // to be polymorphic insofar as they have been externally declared as
     // polymorphic 
-    println!("{:?}", infer(&parse(&context, &mut Reader::new("a b -> a c -> a d -> b d -> c e -> f a -> f g -> b f")).unwrap()));
+    // println!("{:?}", infer(&parse(&context, &mut Reader::new("a b -> a c -> a d -> b d -> c e -> f a -> f g -> b f")).unwrap()));
 }

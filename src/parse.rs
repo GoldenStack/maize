@@ -1,22 +1,23 @@
-use std::collections::{HashMap, HashSet};
+use std::{backtrace::Backtrace, collections::{HashMap, HashSet}};
 
 use daggy::{petgraph::{algo::dijkstra, visit::IntoNodeIdentifiers}, Dag, NodeIndex};
 
 use crate::ast::{Associativity, Expr};
 
 /// A result from parsing an expression.
+/// 
 /// This contains either the parameterized type `<T>` or the remaining portion
 /// of the input string along with an error that occurred.
-type PResult<T> = Result<T, (String, PError)>;
+pub type PResult<T> = Result<T, (String, PError)>;
 
 /// An error that occurred while parsing.
 #[derive(Debug, PartialEq)]
 pub enum PError {
-    /// Expected the given string at this location, but did not find it.
-    Expected(String),
+    /// Expected closing parentheses, but did not find them.
+    ExpectedClosingParentheses,
 
-    /// Did not expect the given string at this location, but found it.
-    Unexpected(String),
+    /// Did not expect closing parentheses, but found them.
+    UnexpectedClosingParentheses,
 
     /// Did not expect an infix expression at this location, but found one.
     UnexpectedInfix(String),
@@ -56,6 +57,8 @@ impl<'a> Clone for Reader<'a> {
 
 impl<'a> Reader<'a> {
 
+    /// Creates a new reader at the start of the given string and with no
+    /// minimum indentation.
     pub fn new(source: &'a str) -> Self {
         Reader {
             source,
@@ -72,6 +75,7 @@ impl<'a> Reader<'a> {
         self.min_indent = min_indent;
     }
 
+    /// Returns a slice containing the unread portion of the source string.
     pub fn slice(&self) -> &'a str {
         &self.source[self.pos..]
     }
@@ -88,10 +92,13 @@ impl<'a> Reader<'a> {
         return result;
     }
 
+    /// Creates an error at the current position in this reader.
     pub fn err<T>(&self, error: PError) -> PResult<T> {
         Err((self.slice().to_owned(), error))
     }
     
+    /// Identical return value to [Reader::err], but replaces this reader with
+    /// the other. This is intended for reverting to a previous state.
     pub fn err_reset<T>(&mut self, other: Reader<'a>, error: PError) -> PResult<T> {
         *self = other;
         Err((self.slice().to_owned(), error))
@@ -99,7 +106,12 @@ impl<'a> Reader<'a> {
 
 }
 
-fn whitespace(input: &mut Reader) -> PResult<usize> {
+/// Reads whitespace from a reader.
+/// 
+/// This can fail because the parser supports significant whitespace.
+/// Specifically, the last line break before a token must have at least
+/// [Reader::min_indent] characters of whitespace directly following it.
+pub fn whitespace(input: &mut Reader) -> PResult<usize> {
     let mut has_break = false;
     let mut ws = 0;
 
@@ -128,21 +140,23 @@ fn whitespace(input: &mut Reader) -> PResult<usize> {
     }
 }
 
-fn real_token(input: &mut Reader) -> PResult<String> {
+/// Parses the next token from a reader.
+/// This includes reading whitespace.
+/// 
+/// Specifically, a token is either:
+/// - Exactly one `(` or `)`
+/// - Any number of alphanumeric characters or `\``, `'`, or `.`
+/// - Any number of non-alphanumeric characters or `\``, `'`, or `.`
+pub fn next_token(input: &mut Reader) -> PResult<String> {
     whitespace(input)?;
 
     let standalone = |c: char| c == '(' || c == ')';
     let group = |c: char| c.is_alphanumeric();
     let always_allowed = |c: char| c == '`' || c == '\'' || c == '.';
-    let never_allowed = |c: char| c.is_whitespace();
 
     let Some(first) = input.next() else {
         return input.err(PError::EOF);
     };
-
-    if never_allowed(first) {
-        return input.err(PError::Unexpected(first.into()));
-    }
 
     if standalone(first) {
         return Ok(first.into());
@@ -158,7 +172,7 @@ fn real_token(input: &mut Reader) -> PResult<String> {
 
     loop {
         if let Some(char) = input.peek(|i| i.next()) {
-            if standalone(char) || never_allowed(char) {
+            if standalone(char) || char.is_whitespace() {
                 return Ok(str);
             }
 
@@ -180,6 +194,10 @@ fn real_token(input: &mut Reader) -> PResult<String> {
     }
 }
 
+/// Returns the leftmost node in an expression.
+/// 
+/// The leftmost node is the base expression (e.g. `+` in `((+ 2) 2)`) and uses
+/// the same terminology as a binary tree.
 pub fn leftmost(expr: &Expr) -> &String {
     match expr {
         Expr::App(a, _) => leftmost(a),
@@ -187,6 +205,14 @@ pub fn leftmost(expr: &Expr) -> &String {
     }
 }
 
+/// Stores context for parsing.
+/// 
+/// Each `Context` instance contains a partial ordering of operator precedences,
+/// a list of associativities of operators with themselves, and a set containing
+/// all expressions that are infix by default.
+/// 
+/// The context stores static information about parsing.
+/// Cheap, copyable, and dynamic information is stored in the [Reader] instance.
 pub struct Context {
     partial_order: Dag<String, (), u32>,
     self_referential: HashMap<String, Associativity>,
@@ -227,28 +253,46 @@ impl Context {
         }
     }
 
-    pub fn get_ident(&self, str: &str) -> Option<NodeIndex> {
+    /// Returns the numerical index, in the partial order graph, of the provided
+    /// operator, or `None` if none exists.
+    pub fn get_ident(&self, operator: &str) -> Option<NodeIndex> {
         self.partial_order.node_identifiers()
-            .find(|i| self.partial_order[*i] == str)
+            .find(|i| self.partial_order[*i] == operator)
     }
 
-    pub fn ensure_ident(&mut self, str: &str) -> NodeIndex {
-        self.get_ident(str).unwrap_or_else(|| self.partial_order.add_node(str.to_owned()))
+    /// Returns the numerical index, in the partial order graph, of the provided
+    /// operator, creating one if necessary.
+    pub fn ensure_ident(&mut self, operator: &str) -> NodeIndex {
+        self.get_ident(operator)
+            .unwrap_or_else(|| self.partial_order.add_node(operator.to_owned()))
     }
 
+    /// Returns whether or not there is a path from the left node to the right
+    /// node using Dijkstra's algorithm.
     pub fn path_from(&self, left: NodeIndex, right: NodeIndex) -> bool {
         dijkstra(&self.partial_order, left, Some(right), |_| 1).contains_key(&right)
     }
 
-    pub fn gt(&mut self, left: &str, right: &str) -> bool {
-        let l = self.ensure_ident(left);
-        let r = self.ensure_ident(right);
+    /// Indicates that the first operator has higher binding power than the
+    /// second by adding an edge from the first to the second.
+    /// 
+    /// If there is already a path from the second operator to the first
+    /// operator, a cycle would occur; in this case, the edge is not added and
+    /// `false` is returned.
+    pub fn gt(&mut self, first: &str, second: &str) -> bool {
+        let f = self.ensure_ident(first);
+        let s = self.ensure_ident(second);
 
-        self.partial_order.update_edge(l, r, ()).is_ok()
+        self.partial_order.update_edge(f, s, ()).is_ok()
     }
 
-    pub fn lt(&mut self, left: &str, right: &str) -> bool {
-        self.gt(right, left)
+    /// Indicates that the second operator has higher binding power than the
+    /// first by adding an edge from the second to the first.
+    /// 
+    /// This has identical semantics to [Context::gt], except with the arguments
+    /// switched.
+    pub fn lt(&mut self, first: &str, second: &str) -> bool {
+        self.gt(first, second)
     }
 
     /// Gets the defined associativity between two operators.
@@ -293,18 +337,25 @@ impl Context {
         }
     }
 
+    /// Marks the provided operator as left associative (to itself).
     pub fn la(&mut self, op: &str) {
         self.self_referential.insert(op.to_owned(), Associativity::Left);
     }
 
+    /// Marks the provided operator as right associative (to itself).
     pub fn ra(&mut self, op: &str) {
         self.self_referential.insert(op.to_owned(), Associativity::Right);
     }
 
+    /// Marks the provided operator as an infix operator.
     pub fn infix(&mut self, op: &str) {
         self.infix.insert(op.to_owned());
     }
 
+    /// Determines whether or not a given token is an infix operator.
+    /// A token is infix if it's marked as infix in this context and is not
+    /// placed between grave symbols (\`), or if it's a non-infix operator that
+    /// is placed between grave symbols.
     pub fn is_infix(&self, op: &str) -> bool {
         // Operation is infix if grave symbols are used, or if it's marked as
         // infix. Grave symbols around an infix operation negate its infixation.
@@ -321,16 +372,20 @@ impl Context {
     
 }
 
+/// Parses a basic "token". This is the most low-level part of the parser.
+/// 
+/// A basic "token" is either a name ([Expr::Name]) or a parenthesized
+/// expression (e.g. `(1 + 2)`).
 pub fn parse_basic(context: &Context, input: &mut Reader) -> PResult<Expr> {
     let old_input = input.clone();
-    let token = real_token(input)?;
+    let token = next_token(input)?;
 
     match token.as_str() {
         // Do not allow standalone infixes
         _ if context.is_infix(&token) => input.err_reset(old_input, PError::UnexpectedInfix(token.into())),
 
         // Do not allow standalone closing parentheses
-        ")" => input.err_reset(old_input, PError::Unexpected(")".into())),
+        ")" => input.err_reset(old_input, PError::UnexpectedClosingParentheses) ,
 
         "(" => { // Parse opening parentheses
             // Allow any expression within them
@@ -345,9 +400,9 @@ pub fn parse_basic(context: &Context, input: &mut Reader) -> PResult<Expr> {
             // Require closing parentheses
             let copy = input.clone();
 
-            match real_token(input) {
+            match next_token(input) {
                 Ok(t) if t == ")" => Ok(infix),
-                _ => input.err_reset(copy, PError::Expected(")".into())),
+                _ => input.err_reset(copy, PError::ExpectedClosingParentheses),
             }
         },
 
@@ -356,6 +411,10 @@ pub fn parse_basic(context: &Context, input: &mut Reader) -> PResult<Expr> {
     }
 }
 
+/// Parses prefix expressions (e.g. `a b c`).
+/// 
+/// All prefix expressions bind stronger than infix expressions, and prefix
+/// expressions have left associativity by default.
 pub fn parse_prefix(context: &Context, mut left: Expr, input: &mut Reader) -> PResult<Expr> {
     loop {
         // If there isn't another basic expression, this means it's not a
@@ -376,10 +435,12 @@ pub fn parse_prefix(context: &Context, mut left: Expr, input: &mut Reader) -> PR
     }
 }
 
-fn read_infix(context: &Context, input: &mut Reader) -> Option<String> {
+/// Optionally parses an infix operator. This returns an option instead of an
+/// error because at no place in the code are infix operators required.
+pub fn read_infix(context: &Context, input: &mut Reader) -> Option<String> {
     let copy = input.clone();
 
-    let token = real_token(input).ok().filter(|op| context.is_infix(op));
+    let token = next_token(input).ok().filter(|op| context.is_infix(op));
 
     // Revert progress
     if token.is_none() {
@@ -389,6 +450,8 @@ fn read_infix(context: &Context, input: &mut Reader) -> Option<String> {
     token
 }
 
+/// Counts the current indentation in a reader. This is defined as the number
+/// of characters since the last line break.
 pub fn indentation(input: &Reader) -> usize {
     let last_line_break = input.source[0..input.pos].rfind("\n") // Find a line break
         .map(|n| n + 1) // Take the character after it, if there is one
@@ -397,6 +460,49 @@ pub fn indentation(input: &Reader) -> usize {
     input.pos - last_line_break
 }
 
+/// Parses an indented block in a reader.
+/// 
+/// An indented block is defined as the following:
+/// The block operator, a colon (`:`), indicates the start of a block, which
+/// involves significant whitespace.
+/// 
+/// A block, following the block operator, is a list of expressions that are
+/// sequentially applied to the expression before the block operator.
+/// The minimum indentation for a block operator is defined as the indentation
+/// of the token immediately after the block operator.
+/// ```Maize
+/// a = Map: x = 2
+///          y = 3
+/// ```
+/// The indentation of the above block is 9 characters, because the token `x` is
+/// 9 characters after the start of a line.
+/// Expressions within a block can be continued by including more whitespace
+/// than is required in the block. For example, to split `1 + 2` between two
+/// lines, indent the `+ 2` more than is required.
+/// ```Maize
+/// a = Map:
+///      x = 1
+///       + 2
+///      y = 3
+/// ```
+/// A block is over when it reaches a token with less indentation that is
+/// required for the block. For example, the following code is equal to the
+/// expression `(A (B C) D)`.
+/// ```Maize
+/// A:
+///  B:
+///   C
+///  D
+/// E
+/// ```
+/// You can see `E` is not included in the `A` block because it has less
+/// indentation than `B`.
+/// 
+/// The semantics of indentation in Maize are similar to Haskell, except with a
+/// single symbolic operator instead of multiple different keywords. For
+/// reference, see [Haskell/Indentation](https://en.wikibooks.org/wiki/Haskell/Indentation).
+/// 
+/// 
 pub fn parse_indented_block(context: &Context, mut left: Expr, input: &mut Reader) -> PResult<Expr> {
 
     let mut copy = input.clone();
@@ -428,6 +534,13 @@ pub fn parse_indented_block(context: &Context, mut left: Expr, input: &mut Reade
     }
 }
 
+/// Parses infix expressions (e.g. `1 + 2`).
+/// Infix expressions bind the weakest out of any type of expression, and their
+/// associativity, if relevant in an expression while parsing, must be defined
+/// via [Context::gt] or [Context::lt], or a compile error will occur.
+/// 
+/// The block operator (`:`) is defined as an infix expression, and is handled
+/// here. It introduces significant whitespace to the language.
 pub fn parse_infix(context: &Context, mut left: Expr, input: &mut Reader) -> PResult<Expr> {
 
     loop {
@@ -470,11 +583,15 @@ pub fn parse_infix(context: &Context, mut left: Expr, input: &mut Reader) -> PRe
     }
 }
 
+/// Parses an expression.
+/// 
+/// Parsing occurs down the parse tree:
+/// 
+/// [parse_infix] -> [parse_prefix] -> [parse_basic]
+/// 
+/// Lower-down parses bind stronger than more high-level ones.
 pub fn parse(context: &Context, input: &mut Reader) -> PResult<Expr> {
-    // Parsing occurs down the parse tree:
-    // Infix -> Prefix -> Basic
-
-    // We replicate the first version of that here as it makes other parts
+    // We replicate the first version of the tree here as it makes other parts
     // of the implementation much simpler.
     parse_infix(context, parse_prefix(context, parse_basic(context, input)?, input)?, input)
 }
