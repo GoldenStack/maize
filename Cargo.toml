@@ -12,4 +12,4 @@ license = "GPL-3.0"
 
 [dependencies]
 daggy = "0.8.0"
-itertools = "0.12.1"
+itertools = "0.13.0"
