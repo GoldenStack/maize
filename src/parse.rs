@@ -292,7 +292,7 @@ impl Context {
     /// This has identical semantics to [Context::gt], except with the arguments
     /// switched.
     pub fn lt(&mut self, first: &str, second: &str) -> bool {
-        self.gt(first, second)
+        self.gt(second, first)
     }
 
     /// Gets the defined associativity between two operators.
