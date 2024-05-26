@@ -1,8 +1,20 @@
-use std::{backtrace::Backtrace, collections::{HashMap, HashSet}};
+use std::collections::{HashMap, HashSet};
 
 use daggy::{petgraph::{algo::dijkstra, visit::IntoNodeIdentifiers}, Dag, NodeIndex};
 
 use crate::ast::{Associativity, Expr};
+
+pub const BLOCK_OPERATOR: &'static str = ":";
+
+pub const LINE_BREAK: char = '\n';
+
+pub const OPEN_PAREN: char = '(';
+pub const CLOSE_PAREN: char = ')';
+pub const BACKTICK: char = '`';
+
+const OPEN_PAREN_STR: &'static str = "(";
+const CLOSE_PAREN_STR: &'static str = ")";
+const BACKTICK_STR: &'static str = "`";
 
 /// A result from parsing an expression.
 /// 
@@ -120,7 +132,7 @@ pub fn whitespace(input: &mut Reader) -> PResult<usize> {
     loop {
         if let Some(char) = input.peek(|i| i.next()) {
             if char.is_whitespace() {
-                if char == '\n' {
+                if char == LINE_BREAK {
                     ws = 0;
                     has_break = true;
                 } else {
@@ -150,15 +162,15 @@ pub fn whitespace(input: &mut Reader) -> PResult<usize> {
 pub fn next_token(input: &mut Reader) -> PResult<String> {
     whitespace(input)?;
 
-    let standalone = |c: char| c == '(' || c == ')';
     let group = |c: char| c.is_alphanumeric();
-    let always_allowed = |c: char| c == '`' || c == '\'' || c == '.';
+    let always_allowed = |c: char| c == BACKTICK || c == '\'' || c == '.';
+    let never_allowed = |c: char| c == OPEN_PAREN || c == CLOSE_PAREN || c.is_whitespace();
 
     let Some(first) = input.next() else {
         return input.err(PError::EOF);
     };
 
-    if standalone(first) {
+    if first == OPEN_PAREN || first == CLOSE_PAREN {
         return Ok(first.into());
     }
 
@@ -172,17 +184,14 @@ pub fn next_token(input: &mut Reader) -> PResult<String> {
 
     loop {
         if let Some(char) = input.peek(|i| i.next()) {
-            if standalone(char) || char.is_whitespace() {
+            if never_allowed(char) {
                 return Ok(str);
             }
 
             if !always_allowed(char) {
-                if let Some(mode) = mode {
-                    if mode != group(char) {
-                        return Ok(str);
-                    }
-                } else {
-                    mode = Some(group(char));
+                match mode {
+                    Some(mode) if mode != group(char) => return Ok(str),
+                    _ => mode = Some(group(char)),
                 }
             }
 
@@ -194,14 +203,26 @@ pub fn next_token(input: &mut Reader) -> PResult<String> {
     }
 }
 
-/// Returns the leftmost node in an expression.
-/// 
-/// The leftmost node is the base expression (e.g. `+` in `((+ 2) 2)`) and uses
-/// the same terminology as a binary tree.
+/// Returns the value of the leftmost node in an expression. This is possible
+/// because the leftmost node must be an [Expr::Name].
 pub fn leftmost(expr: &Expr) -> &String {
     match expr {
-        Expr::App(a, _) => leftmost(a),
         Expr::Name(name) => name,
+        Expr::App(left, _) => leftmost(left)
+    }
+}
+
+/// Returns the leftmost node in an expression, along with the depth of the
+/// node.
+/// 
+/// The returned expression is guaranteed to be an [Expr::Name].
+pub fn leftmost_wrapped(expr: &Expr) -> (&Expr, u64) {
+    match expr {
+        Expr::Name(_) => (expr, 0),
+        Expr::App(left, _) => {
+            let c = leftmost_wrapped(left);
+            (c.0, c.1 + 1)
+        },
     }
 }
 
@@ -363,8 +384,8 @@ impl Context {
             return true;
         }
 
-        if op.starts_with("`") && op.ends_with("`") && op.len() > 1 {
-            return !self.infix.contains(&op[1..op.len()-1]);
+        if let Some(token) = de_infix(op) {
+            return !self.infix.contains(token);
         }
 
         false
@@ -385,9 +406,9 @@ pub fn parse_basic(context: &Context, input: &mut Reader) -> PResult<Expr> {
         _ if context.is_infix(&token) => input.err_reset(old_input, PError::UnexpectedInfix(token.into())),
 
         // Do not allow standalone closing parentheses
-        ")" => input.err_reset(old_input, PError::UnexpectedClosingParentheses) ,
+        CLOSE_PAREN_STR => input.err_reset(old_input, PError::UnexpectedClosingParentheses) ,
 
-        "(" => { // Parse opening parentheses
+        OPEN_PAREN_STR => { // Parse opening parentheses
             // Allow any expression within them
             let infix = match parse(context, input) {
                 Ok(ok) => ok,
@@ -401,13 +422,13 @@ pub fn parse_basic(context: &Context, input: &mut Reader) -> PResult<Expr> {
             let copy = input.clone();
 
             match next_token(input) {
-                Ok(t) if t == ")" => Ok(infix),
+                Ok(t) if t == CLOSE_PAREN_STR => Ok(infix),
                 _ => input.err_reset(copy, PError::ExpectedClosingParentheses),
             }
         },
 
         // Otherwise it's a named token
-        _ => Ok(Expr::Name(de_infix(token))),
+        _ => Ok(Expr::Name(de_infix_into(token))),
     }
 }
 
@@ -453,11 +474,11 @@ pub fn read_infix(context: &Context, input: &mut Reader) -> Option<String> {
 /// Counts the current indentation in a reader. This is defined as the number
 /// of characters since the last line break.
 pub fn indentation(input: &Reader) -> usize {
-    let last_line_break = input.source[0..input.pos].rfind("\n") // Find a line break
+    let last_line_break = input.source[0..input.pos].rfind("\n") // Find the last line break
         .map(|n| n + 1) // Take the character after it, if there is one
         .unwrap_or(input.pos); // Otherwise, just take the length of the entire string
 
-    input.pos - last_line_break
+    input.source[last_line_break..input.pos].chars().count()
 }
 
 /// Parses an indented block in a reader.
@@ -550,12 +571,12 @@ pub fn parse_infix(context: &Context, mut left: Expr, input: &mut Reader) -> PRe
             return Ok(left);
         };
 
-        if infix == ":" {
+        if infix == BLOCK_OPERATOR {
             return parse_indented_block(context, left, input);
         }
 
         // Parse the left part and the infix part (but flipped, as is infix)
-        let left_and_infix = Expr::App(Box::new(Expr::Name(de_infix(infix))), Box::new(left));
+        let left_and_infix = Expr::App(Box::new(Expr::Name(de_infix_into(infix))), Box::new(left));
 
         // Append the right half
         let all = parse_prefix(context, left_and_infix, input)?;
@@ -596,10 +617,136 @@ pub fn parse(context: &Context, input: &mut Reader) -> PResult<Expr> {
     parse_infix(context, parse_prefix(context, parse_basic(context, input)?, input)?, input)
 }
 
-pub fn de_infix(op: String) -> String {
-    if op.starts_with("`") && op.ends_with("`") && op.len() > 1 {
-        op[1..op.len()-1].to_owned()
-    } else {
-        op
-    }
+pub fn de_infix_into(op: String) -> String {
+    de_infix(&op).map(str::to_owned).unwrap_or(op)
+}
+
+pub fn de_infix(op: &str) -> Option<&str> {
+    const LEN: usize = BACKTICK_STR.len();
+    let is_infix = op.starts_with(BACKTICK) && op.ends_with(BACKTICK) && op.len() >= 2 * LEN;
+
+    if is_infix { Some(&op[LEN..op.len()-LEN]) } else { None }
+}
+
+#[cfg(test)]
+mod tests {
+
+use crate::{ast::Expr, parse::{parse, Context, Reader}};
+
+fn name(name: &str) -> Expr {
+    Expr::Name(name.to_owned())
+}
+
+fn app(app: Expr, var: Expr) -> Expr {
+    Expr::App(Box::new(app), Box::new(var))
+}
+
+fn infix(infix: &str, left: Expr, right: Expr) -> Expr {
+    app(app(Expr::Name(infix.into()), left), right)
+}
+
+fn raw_infix(infix_expr: &str, left: &str, right: &str) -> Expr {
+    infix(infix_expr.into(), name(left), name(right))
+}
+
+#[test]
+pub fn test_parsing() {
+    let context = Context::default();
+    
+    let input = "length (pos x y z) = (x ^ 2 + y ^ 2 + z ^ 2) ^ 0.5";
+    let mut input = Reader::new(input);
+
+    let expected = infix(
+        "=",
+        app(
+            name("length"),
+            [name("pos"), name("x"), name("y"), name("z")].into_iter().reduce(app).unwrap()
+        ),
+        infix(
+            "^",
+            infix(
+                "+",
+                raw_infix("^", "x", "2"),
+                infix(
+                    "+",
+                    raw_infix("^", "y", "2"),
+                    raw_infix("^", "z", "2")
+                )
+            ),
+            name("0.5")
+        )
+    );
+    
+    assert_eq!(parse(&context, &mut input), Ok(expected));
+
+}
+
+#[test]
+pub fn test_parsing_equality() {
+    assert_parse(
+        "a + c d e",
+        "(`+` a) ((c d) e)",
+    );
+
+    assert_parse(
+        "fst (a, b) = a",
+        "(`=` (fst ((`,` a) b))) a",
+    );
+
+    assert_parse(
+        "example :: Int -> Int -> List Int -> Map $ List String",
+        "(`::` example) ((`->` Int) ((`->` Int) ((`->` (List Int)) ((`$` Map) (List String)))))"
+    );
+}
+
+#[test]
+pub fn test_block_operator() {
+    assert_parse(
+        "
+        pos = (id Pos):
+          x :: 5
+          y :: 7",
+        "((`=` pos) (((id Pos) ((`::` x) 5)) ((`::` y) 7)))"
+    );
+
+    assert_parse(r#"
+        module Main where:
+
+        seven = 5
+         + 2
+        true = 5 == 5
+
+        map = Map:
+            name = "oven"
+            example :: Bool
+            example = True"#,
+    r#"(((((module Main) where) ((`=` seven) ((`+` 5) 2))) ((`=` true) ((`==` 5) 5))) ((`=` map) (((Map ((`=` name) "oven")) ((`::` example) Bool)) ((`=` example) True))))"#);
+
+    assert_parse_rem(r#"
+    A:
+     B:
+      C:
+       D: H
+          I
+           J
+          K
+       D2:L
+    Unread
+    "#, 16,
+    "(A (B ((C (((D H) (I J)) K)) (D2 L))))", 0);
+}
+
+fn assert_parse(first: &str, second: &str) {
+    assert_parse_rem(first, 0, second, 0);
+}
+
+fn assert_parse_rem(first: &str, first_len: usize, second: &str, second_len: usize) {
+    let context = Context::default();
+    let (mut f, mut s) = (Reader::new(first), Reader::new(second));
+    assert_eq!(parse(&context, &mut f), parse(&context, &mut s));
+
+    assert_eq!(f.slice().len(), first_len);
+    assert_eq!(s.slice().len(), second_len);
+}
+
 }
