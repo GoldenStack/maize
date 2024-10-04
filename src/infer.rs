@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use itertools::Itertools;
 
-use crate::{ast::Expr, parse::{leftmost, leftmost_wrapped}};
+use crate::parse::{AST, leftmost, leftmost_wrapped};
 
 /// Performs a single pass of type inference over the provided typed
 /// expressions, returning a list of pairs of types that are equal.
@@ -47,7 +47,7 @@ use crate::{ast::Expr, parse::{leftmost, leftmost_wrapped}};
 /// 
 /// This is why the `ignored` parameter exists. Ignored parameters cannot be
 /// used as the subject for any type inference rules.
-pub fn infer_once<'a, F: Fn(&'a String) -> bool>(types: &HashMap<&'a Expr, usize>, ignored: &F) -> Vec<(usize, usize)> {
+pub fn infer_once<'a, F: Fn(&'a String) -> bool>(types: &HashMap<&'a AST, usize>, ignored: &F) -> Vec<(usize, usize)> {
     // List of types that we know are equal.
     let mut relations: Vec<(usize, usize)> = Vec::new();
 
@@ -79,7 +79,7 @@ pub fn infer_once<'a, F: Fn(&'a String) -> bool>(types: &HashMap<&'a Expr, usize
     let mut expr_to_application_id: HashMap<usize, usize> = HashMap::new();
 
     for expr in types.keys().filter(|expr| !ignored(leftmost(expr))) {
-        let Expr::App(left, right) = expr else { continue };
+        let AST::App(left, right) = expr else { continue };
 
         let left_id = *types.get(left.as_ref()).unwrap();
         let right_id = *types.get(right.as_ref()).unwrap();
@@ -100,7 +100,7 @@ pub fn infer_once<'a, F: Fn(&'a String) -> bool>(types: &HashMap<&'a Expr, usize
 /// 
 /// Inference passes stop when no more inferences are made than the last
 /// iteration.
-pub fn infer_many<'a, F: Fn(&'a String) -> bool>(types: &mut HashMap<&'a Expr, usize>, ignored: &F) {
+pub fn infer_many<'a, F: Fn(&'a String) -> bool>(types: &mut HashMap<&'a AST, usize>, ignored: &F) {
     loop {
         let relations = infer_once(types, ignored);
 
@@ -126,12 +126,12 @@ pub fn infer_many<'a, F: Fn(&'a String) -> bool>(types: &mut HashMap<&'a Expr, u
 /// given expression.
 /// The numbers are meaningless, except for that subtrees with equal type
 /// numbers are assumed to have equal types.
-pub fn infer<'a, F: Fn(&'a String) -> bool>(expr: &'a Expr, ignored: &F) -> HashMap<&'a Expr, usize> {
+pub fn infer<'a, F: Fn(&'a String) -> bool>(expr: &'a AST, ignored: &F) -> HashMap<&'a AST, usize> {
     // Assign each expression a type, removing duplicates.
     // Technically, this doesn't need to deduplicate equivalent nodes as the
     // remaining algorithm will take care of the rest, but there's no harm in
     // easy deduplication.
-    let mut types: HashMap<&Expr, usize> = collect(expr)
+    let mut types: HashMap<&AST, usize> = collect(expr)
         .iter()
         .unique()
         .enumerate()
@@ -154,7 +154,7 @@ pub fn infer<'a, F: Fn(&'a String) -> bool>(expr: &'a Expr, ignored: &F) -> Hash
 }
 
 /// Collects all subtrees of the provided expression into a list.
-pub fn collect<'a>(expr: &'a Expr) -> Vec<&'a Expr> {
+pub fn collect<'a>(expr: &'a AST) -> Vec<&'a AST> {
     let mut vec = Vec::new();
     collect_into(expr, &mut vec);
     vec
@@ -162,9 +162,9 @@ pub fn collect<'a>(expr: &'a Expr) -> Vec<&'a Expr> {
 
 /// Collects all subtrees of the provided expression into the provided list.
 /// This is used internally in [collect].
-fn collect_into<'a>(expr: &'a Expr, vec: &mut Vec<&'a Expr>) {
+fn collect_into<'a>(expr: &'a AST, vec: &mut Vec<&'a AST>) {
     vec.push(expr);
-    if let Expr::App(l, r) = expr {
+    if let AST::App(l, r) = expr {
         collect_into(l, vec);
         collect_into(r, vec);
     }

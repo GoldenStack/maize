@@ -2,8 +2,6 @@ use std::collections::{HashMap, HashSet};
 
 use daggy::{petgraph::{algo::dijkstra, visit::IntoNodeIdentifiers}, Dag, NodeIndex};
 
-use crate::ast::{Associativity, Expr};
-
 pub const BLOCK_OPERATOR: &'static str = ":";
 
 pub const LINE_BREAK: char = '\n';
@@ -15,6 +13,48 @@ pub const BACKTICK: char = '`';
 const OPEN_PAREN_STR: &'static str = "(";
 const CLOSE_PAREN_STR: &'static str = ")";
 const BACKTICK_STR: &'static str = "`";
+
+use core::fmt;
+use std::fmt::{Debug, Display};
+
+/// A code expression in Maize.
+/// 
+/// An expression is either a string literal ("Name"), or an application of one
+/// expression to another ("App").
+/// 
+/// This is the entire initial AST. Yes, it's really this simple.
+/// 
+/// An expression is represented as a binary tree. This allows more well-known
+/// algorithms and terms to be applied to it.
+#[derive(Debug, Eq, PartialEq, Hash)]
+pub enum AST {
+    Name(String),
+    App(Box<AST>, Box<AST>)
+}
+
+/// Associativity rules.
+/// 
+/// Consider the expression `a b c d`.
+/// Left associative parsing looks like `(((a b) c) d)`, while right associative
+/// parsing looks like `(a (b (c d)))`.
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
+pub enum Associativity {
+    Left, Right
+}
+
+/// Displays an expression.
+/// 
+/// `Name` types just return the name, while `App` types return stringified
+/// forms of the arguments, surrounded by paretheses.
+impl Display for AST {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AST::Name(str) => write!(f, "{}", str),
+            AST::App(a, b) => write!(f, "({} {})", a, b),
+        }
+    }
+}
+
 
 /// A result from parsing an expression.
 /// 
@@ -130,7 +170,7 @@ pub fn whitespace(input: &mut Reader) -> PResult<usize> {
     let start = input.clone();
 
     loop {
-        if let Some(char) = input.peek(|i| i.next()) {
+        if let Some(char) = input.peek(|i| i.next()).filter(|c| c.is_whitespace()) {
             if char.is_whitespace() {
                 if char == LINE_BREAK {
                     ws = 0;
@@ -205,10 +245,10 @@ pub fn next_token(input: &mut Reader) -> PResult<String> {
 
 /// Returns the value of the leftmost node in an expression. This is possible
 /// because the leftmost node must be an [Expr::Name].
-pub fn leftmost(expr: &Expr) -> &String {
+pub fn leftmost(expr: &AST) -> &String {
     match expr {
-        Expr::Name(name) => name,
-        Expr::App(left, _) => leftmost(left)
+        AST::Name(name) => name,
+        AST::App(left, _) => leftmost(left)
     }
 }
 
@@ -216,10 +256,10 @@ pub fn leftmost(expr: &Expr) -> &String {
 /// node.
 /// 
 /// The returned expression is guaranteed to be an [Expr::Name].
-pub fn leftmost_wrapped(expr: &Expr) -> (&Expr, u64) {
+pub fn leftmost_wrapped(expr: &AST) -> (&AST, u64) {
     match expr {
-        Expr::Name(_) => (expr, 0),
-        Expr::App(left, _) => {
+        AST::Name(_) => (expr, 0),
+        AST::App(left, _) => {
             let c = leftmost_wrapped(left);
             (c.0, c.1 + 1)
         },
@@ -244,7 +284,7 @@ impl Default for Context {
     fn default() -> Self {
         let mut context = Context::new();
 
-        ["->", "^", "*"]
+        ["->", "^", "*", "\\"]
             .iter().for_each(|i| context.ra(i));
 
         context.gt("^", "*");
@@ -397,7 +437,7 @@ impl Context {
 /// 
 /// A basic "token" is either a name ([Expr::Name]) or a parenthesized
 /// expression (e.g. `(1 + 2)`).
-pub fn parse_basic(context: &Context, input: &mut Reader) -> PResult<Expr> {
+pub fn parse_basic(context: &Context, input: &mut Reader) -> PResult<AST> {
     let old_input = input.clone();
     let token = next_token(input)?;
 
@@ -428,7 +468,7 @@ pub fn parse_basic(context: &Context, input: &mut Reader) -> PResult<Expr> {
         },
 
         // Otherwise it's a named token
-        _ => Ok(Expr::Name(de_infix_into(token))),
+        _ => Ok(AST::Name(de_infix_into(token))),
     }
 }
 
@@ -436,7 +476,7 @@ pub fn parse_basic(context: &Context, input: &mut Reader) -> PResult<Expr> {
 /// 
 /// All prefix expressions bind stronger than infix expressions, and prefix
 /// expressions have left associativity by default.
-pub fn parse_prefix(context: &Context, mut left: Expr, input: &mut Reader) -> PResult<Expr> {
+pub fn parse_prefix(context: &Context, mut left: AST, input: &mut Reader) -> PResult<AST> {
     loop {
         // If there isn't another basic expression, this means it's not a
         // prefix operation, so we can exit.
@@ -449,7 +489,7 @@ pub fn parse_prefix(context: &Context, mut left: Expr, input: &mut Reader) -> PR
         // If it's right associative relative to the left element we pair it
         // up with the element after it. Otherwise we ignore the element
         // after and allow following loop iterations to handle it.
-        left = Expr::App(Box::new(left), Box::new(match order {
+        left = AST::App(Box::new(left), Box::new(match order {
                 Associativity::Right => parse_prefix(context, right, input)?,
                 Associativity::Left => right
         }));
@@ -524,7 +564,7 @@ pub fn indentation(input: &Reader) -> usize {
 /// reference, see [Haskell/Indentation](https://en.wikibooks.org/wiki/Haskell/Indentation).
 /// 
 /// 
-pub fn parse_indented_block(context: &Context, mut left: Expr, input: &mut Reader) -> PResult<Expr> {
+pub fn parse_indented_block(context: &Context, mut left: AST, input: &mut Reader) -> PResult<AST> {
 
     let mut copy = input.clone();
     whitespace(&mut copy)?;
@@ -551,7 +591,7 @@ pub fn parse_indented_block(context: &Context, mut left: Expr, input: &mut Reade
 
         input.set_min_indent(previous_indentation);
 
-        left = Expr::App(Box::new(left), Box::new(parsed));
+        left = AST::App(Box::new(left), Box::new(parsed));
     }
 }
 
@@ -562,7 +602,7 @@ pub fn parse_indented_block(context: &Context, mut left: Expr, input: &mut Reade
 /// 
 /// The block operator (`:`) is defined as an infix expression, and is handled
 /// here. It introduces significant whitespace to the language.
-pub fn parse_infix(context: &Context, mut left: Expr, input: &mut Reader) -> PResult<Expr> {
+pub fn parse_infix(context: &Context, mut left: AST, input: &mut Reader) -> PResult<AST> {
 
     loop {
         // If we can't find an infix operator, this means it's not an infix
@@ -576,7 +616,7 @@ pub fn parse_infix(context: &Context, mut left: Expr, input: &mut Reader) -> PRe
         }
 
         // Parse the left part and the infix part (but flipped, as is infix)
-        let left_and_infix = Expr::App(Box::new(Expr::Name(de_infix_into(infix))), Box::new(left));
+        let left_and_infix = AST::App(Box::new(AST::Name(de_infix_into(infix))), Box::new(left));
 
         // Append the right half
         let all = parse_prefix(context, left_and_infix, input)?;
@@ -595,8 +635,8 @@ pub fn parse_infix(context: &Context, mut left: Expr, input: &mut Reader) -> PRe
         left = match order {
             Associativity::Right => {
                 match all {
-                    Expr::Name(_) => parse_infix(context, all, input)?, // Should not happen
-                    Expr::App(l, r) => Expr::App(l, Box::new(parse_infix(context, *r, input)?)),
+                    AST::Name(_) => parse_infix(context, all, input)?, // Should not happen
+                    AST::App(l, r) => AST::App(l, Box::new(parse_infix(context, *r, input)?)),
                 }
             }
             Associativity::Left => all
@@ -611,7 +651,7 @@ pub fn parse_infix(context: &Context, mut left: Expr, input: &mut Reader) -> PRe
 /// [parse_infix] -> [parse_prefix] -> [parse_basic]
 /// 
 /// Lower-down parses bind stronger than more high-level ones.
-pub fn parse(context: &Context, input: &mut Reader) -> PResult<Expr> {
+pub fn parse(context: &Context, input: &mut Reader) -> PResult<AST> {
     // We replicate the first version of the tree here as it makes other parts
     // of the implementation much simpler.
     parse_infix(context, parse_prefix(context, parse_basic(context, input)?, input)?, input)
@@ -631,21 +671,21 @@ pub fn de_infix(op: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
 
-use crate::{ast::Expr, parse::{parse, Context, Reader}};
+use super::{AST, parse, Context, Reader};
 
-fn name(name: &str) -> Expr {
-    Expr::Name(name.to_owned())
+fn name(name: &str) -> AST {
+    AST::Name(name.to_owned())
 }
 
-fn app(app: Expr, var: Expr) -> Expr {
-    Expr::App(Box::new(app), Box::new(var))
+fn app(app: AST, var: AST) -> AST {
+    AST::App(Box::new(app), Box::new(var))
 }
 
-fn infix(infix: &str, left: Expr, right: Expr) -> Expr {
-    app(app(Expr::Name(infix.into()), left), right)
+fn infix(infix: &str, left: AST, right: AST) -> AST {
+    app(app(AST::Name(infix.into()), left), right)
 }
 
-fn raw_infix(infix_expr: &str, left: &str, right: &str) -> Expr {
+fn raw_infix(infix_expr: &str, left: &str, right: &str) -> AST {
     infix(infix_expr.into(), name(left), name(right))
 }
 
