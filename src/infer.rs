@@ -61,8 +61,8 @@ pub fn infer_once<'a, F: Fn(&'a String) -> bool>(types: &HashMap<&'a Expr, usize
     for expr in types.keys().filter(|expr| !ignored(leftmost(expr))) {
         let (base_left_expr, depth) = leftmost_wrapped(expr);
 
-        let base_left_id = *types.get(&base_left_expr).unwrap();
-        let current_id = *types.get(expr).unwrap();
+        let Some(&base_left_id) = types.get(base_left_expr) else { unreachable!(); };
+        let Some(&current_id) = types.get(expr) else { unreachable!(); };
 
         if let Some(existing_id) = application_map.get(&(base_left_id, depth)) {
             relations.push((current_id, *existing_id));
