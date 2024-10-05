@@ -5,6 +5,9 @@ use daggy::{petgraph::visit::IntoNodeIdentifiers, Dag, NodeIndex};
 pub const OPEN_PAREN: char = '(';
 pub const CLOSE_PAREN: char = ')';
 
+const OPEN_PAREN_STR: &str = "(";
+const CLOSE_PAREN_STR: &str = ")";
+
 /// The abstract syntax tree of Maize code.
 /// 
 /// This is equivalent to the untyped lambda calculus, as Maize is a simple
@@ -28,7 +31,18 @@ impl<'a> Display for AST<'a> {
     }
 }
 
-/// A reader of source code. 
+pub type Result<'a, T> = std::result::Result<T, (Reader<'a>, Error<'a>)>;
+
+#[derive(Debug)]
+pub enum Error<'a> {
+    EOF,
+    UnexpectedClosingParentheses,
+    ExpectedClosingParentheses,
+    UnexpectedInfix(&'a str)
+}
+
+/// A reader of source code.
+#[derive(Debug, Clone, Copy)]
 pub struct Reader<'a> {
     context: &'a Context<'a>,
     src: &'a str,
@@ -93,12 +107,36 @@ impl<'a> Reader<'a> {
         return Some(&self.src[start..self.pos]);
     }
 
-    
+    pub fn read_basic(&mut self) -> Result<'a, AST<'a>> {
+        let start = self.clone();
+        
+        match self.token().ok_or_else(|| (start, Error::EOF))? {
+            op if self.context.is_infix(op) => Err((start, Error::UnexpectedInfix(op))),
+            CLOSE_PAREN_STR => Err((start, Error::UnexpectedClosingParentheses)),
+            OPEN_PAREN_STR => {
+                let body = self.read()?;
+
+                let start = self.clone();
+
+                if matches!(self.token(), Some(CLOSE_PAREN_STR)) {
+                    Ok(body)
+                } else {
+                    Err((start, Error::ExpectedClosingParentheses))
+                }
+            },
+            t => Ok(AST::Var(t))
+        }
+    }
+
+    pub fn read(&mut self) -> Result<'a, AST<'a>> {
+        self.read_basic()
+    }
 }
 
 /// Stores context while parsing, including a partial order for operators,
 /// defined associativity between the same operator twice, and whether or not an
 /// operator is infix.
+#[derive(Debug)]
 pub struct Context<'a> {
     precedence: Dag<&'a str, (), u32>,
     associativity: HashMap<&'a str, Associativity>,
@@ -155,6 +193,11 @@ impl<'a> Context<'a> {
     /// Indicates that an operator is an infix operator.
     pub fn infix(&mut self, op: &'a str) {
         self.infix.insert(op);
+    }
+
+    /// Returns whether or not an operator is infix for this context.
+    pub fn is_infix(&self, op: &'a str) -> bool {
+        self.infix.contains(op)
     }
 
 }
