@@ -1,4 +1,6 @@
-use std::fmt::Display;
+use std::{collections::{HashMap, HashSet}, fmt::Display};
+
+use daggy::{petgraph::visit::IntoNodeIdentifiers, Dag, NodeIndex};
 
 pub const OPEN_PAREN: char = '(';
 pub const CLOSE_PAREN: char = ')';
@@ -26,8 +28,9 @@ impl<'a> Display for AST<'a> {
     }
 }
 
-/// A reader of source code, storing simple, copyable information.
+/// A reader of source code. 
 pub struct Reader<'a> {
+    context: &'a Context<'a>,
     src: &'a str,
     pos: usize,
 }
@@ -35,9 +38,9 @@ pub struct Reader<'a> {
 impl<'a> Reader<'a> {
     
     /// Creates a new reader from the start of the provided string.
-    pub fn new(src: &'a str) -> Self {
+    pub fn new(context: &'a Context<'a>, src: &'a str) -> Self {
         Reader {
-            src, pos: 0
+            context, src, pos: 0
         }
     }
 
@@ -89,4 +92,75 @@ impl<'a> Reader<'a> {
 
         return Some(&self.src[start..self.pos]);
     }
+
+    
+}
+
+/// Stores context while parsing, including a partial order for operators,
+/// defined associativity between the same operator twice, and whether or not an
+/// operator is infix.
+pub struct Context<'a> {
+    precedence: Dag<&'a str, (), u32>,
+    associativity: HashMap<&'a str, Associativity>,
+    infix: HashSet<&'a str>,
+}
+
+impl<'a> Context<'a> {
+
+    pub fn new() -> Self {
+        Context {
+            precedence: Dag::new(),
+            associativity: HashMap::new(),
+            infix: HashSet::new(),
+        }
+    }
+
+    fn get_index(&self, op: &'a str) -> Option<NodeIndex> {
+        self.precedence.node_identifiers()
+            .find(|i| self.precedence[*i] == op)
+    }
+
+    fn get_or_create_index(&mut self, op: &'a str) -> NodeIndex {
+        self.get_index(op).unwrap_or_else(|| self.precedence.add_node(op))
+    }
+
+    /// Creates an edge from a to b, indicating that a has a higher precedence
+    /// (or binding power) than b.
+    /// 
+    /// This will return false if the created precedence rule would create a
+    /// cycle within the acyclic graph, which is not desired as a cycle would
+    /// remove the graph's ability to act as a partial order.
+    pub fn gt(&mut self, a: &'a str, b: &'a str) -> bool {
+        let a = self.get_or_create_index(a);
+        let b = self.get_or_create_index(b);
+
+        self.precedence.update_edge(a, b, ()).is_ok()
+    }
+
+    /// Identical semantics to [Context::gt] except with the operators switched.
+    pub fn lt(&mut self, a: &'a str, b: &'a str) -> bool {
+        self.gt(b, a)
+    }
+
+    /// Indicates that an operator has left associativity with itself.
+    pub fn la(&mut self, op: &'a str) {
+        self.associativity.insert(op, Associativity::Left);
+    }
+
+    /// Indicates that an operator has right associativity with itself.
+    pub fn ra(&mut self, op: &'a str) {
+        self.associativity.insert(op, Associativity::Right);
+    }
+
+    /// Indicates that an operator is an infix operator.
+    pub fn infix(&mut self, op: &'a str) {
+        self.infix.insert(op);
+    }
+
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Associativity {
+    Left,
+    Right,
 }
