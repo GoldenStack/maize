@@ -1,23 +1,13 @@
-pub mod parse;
-pub mod process;
-pub mod infer;
+use ast::Reader;
 
-use process::process;
-
-use crate::parse::{parse, Context, Reader};
+pub mod ast;
 
 fn main() {
-    let input = "(\\x x \\y \\x x y)) 1 2";
+    let src = "abc + ,./";
 
-    let context = Context::default();
+    let mut reader = Reader::new(src);
 
-    let mut input = Reader::new(input);
-    println!("Parsing:  {:?}", input);
-
-    let mut parsed = parse(&context, &mut input).unwrap();
-    println!("Yields:   {}", parsed);
-
-
-    let mut processed = process(parsed);
-    println!("Processed: {}", processed);
+    while let Some(v) = reader.token() {
+        println!("{v}");
+    }
 }
