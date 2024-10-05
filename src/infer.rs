@@ -145,6 +145,29 @@ pub fn infer<'a, F: Fn(&'a String) -> bool>(expr: &'a AST, ignored: &F) -> HashM
 
     infer_many(&mut types, ignored);
 
+    let mut map: HashMap<usize, Vec<usize>> = HashMap::new();
+    
+    for expr in types.keys().filter(|expr| !ignored(leftmost(expr))) {
+        let (base_left_expr, depth) = leftmost_wrapped(expr);
+
+        let vec: &mut Vec<usize> = map.entry(types[base_left_expr]).or_insert_with(|| Vec::new());
+        
+        while vec.len() <= depth as usize {
+            vec.push(0);
+        }
+
+        vec[depth as usize] = types[expr];
+    }
+
+    println!("{}", types.keys().filter(|expr| !ignored(leftmost(expr))).count());
+
+    println!("Types: ");
+    for (k, v) in map.iter() {
+        for k2 in types.iter().filter(|(_, v2)| v2 == &k).map(|(k, _)| k) {
+            println!("{k2} :: {}", v.iter().join(" -> "));
+        }
+    }
+
     println!("\nIdentified After");
     for (k, v) in types.iter().sorted_by_key(|(_, v)| *v) {
         println!("{}\t :: {}", v, k);
