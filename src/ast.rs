@@ -1,6 +1,6 @@
 use std::{collections::{HashMap, HashSet}, fmt::Display};
 
-use daggy::{petgraph::visit::IntoNodeIdentifiers, Dag, NodeIndex};
+use daggy::{petgraph::{algo::dijkstra, visit::IntoNodeIdentifiers}, Dag, NodeIndex};
 
 pub const OPEN_PAREN: char = '(';
 pub const CLOSE_PAREN: char = ')';
@@ -38,7 +38,8 @@ pub enum Error<'a> {
     EOF,
     UnexpectedClosingParentheses,
     ExpectedClosingParentheses,
-    UnexpectedInfix(&'a str)
+    UnexpectedInfix(&'a str),
+    UndefinedAssociativity(String, String),
 }
 
 /// A reader of source code.
@@ -76,6 +77,11 @@ impl<'a> Reader<'a> {
         Some(c)
     }
 
+    fn err_reset(&mut self, copy: Reader<'a>, err: Error<'a>) -> Result<'a, AST<'a>> {
+        self.pos = copy.pos;
+        Err((copy, err))
+    }
+
     /// Reads a token from this reader.
     /// 
     /// A token consists of either [OPEN_PAREN], [CLOSE_PAREN], any number of
@@ -107,12 +113,47 @@ impl<'a> Reader<'a> {
         return Some(&self.src[start..self.pos]);
     }
 
+    pub fn assoc<'b>(&self, left: &'b AST, right: &'b AST) -> Result<'a, Associativity> {
+        fn reduce<'a>(ast: &'a AST<'a>) -> &'a AST<'a> {
+            if let AST::App(l, _) = ast {
+                reduce(l)
+            } else {
+                ast
+            }
+        }
+
+        if let AST::Var(lv) = reduce(left) {
+            if let AST::Var(rv) = reduce(right) {
+                if let Some(assoc) = self.context.get_assoc(lv, rv) {
+                    Ok(assoc)
+                } else {
+                    match (self.context.is_infix(lv), self.context.is_infix(rv)) {
+                        (false, false) => Ok(Associativity::Left),
+                        (true, false) => Ok(Associativity::Right),
+                        (false, true) => Ok(Associativity::Left),
+                        (true, true) => Err((self.clone(), Error::UndefinedAssociativity(lv.to_string(), rv.to_string()))),
+                    }
+                }
+            } else {
+                Ok(Associativity::Right)
+            }
+        } else {
+            if let AST::Var(_) = reduce(right) {
+                Ok(Associativity::Right)
+            } else {
+                Ok(Associativity::Right)
+            }
+        }
+    }
+
+    /// Parses a basic expression (a token or an expression between
+    /// parentheses).
     pub fn read_basic(&mut self) -> Result<'a, AST<'a>> {
         let start = self.clone();
         
         match self.token().ok_or_else(|| (start, Error::EOF))? {
-            op if self.context.is_infix(op) => Err((start, Error::UnexpectedInfix(op))),
-            CLOSE_PAREN_STR => Err((start, Error::UnexpectedClosingParentheses)),
+            op if self.context.is_infix(op) => self.err_reset(start, Error::UnexpectedInfix(op)),
+            CLOSE_PAREN_STR => self.err_reset(start, Error::UnexpectedClosingParentheses),
             OPEN_PAREN_STR => {
                 let body = self.read()?;
 
@@ -121,15 +162,44 @@ impl<'a> Reader<'a> {
                 if matches!(self.token(), Some(CLOSE_PAREN_STR)) {
                     Ok(body)
                 } else {
-                    Err((start, Error::ExpectedClosingParentheses))
+                    self.err_reset(start, Error::ExpectedClosingParentheses)
                 }
+            },
+            "\\" => {
+                let var = self.token().ok_or_else(|| (start, Error::EOF))?;
+
+                Ok(AST::Lam(var, self.read().map(Box::new)?))
             },
             t => Ok(AST::Var(t))
         }
     }
 
+    /// Parses prefix expressions (e.g. `a b c`).
+    /// 
+    /// All prefix expressions have higher precedence (bind stronger) than infix
+    /// expressions, and prefix expressions have left associativity by default.
+    pub fn read_prefix(&mut self, mut left: AST<'a>) -> Result<'a, AST<'a>> {
+        loop {
+            // If there isn't a basic expression to append, we can just return
+            // as there's nothing more to be added.
+            let Ok(right) = self.read_basic() else {
+                return Ok(left);
+            };
+            
+            let order = self.assoc(&left, &right)?;
+
+            // If it's right associative relative to the left element we pair it
+            // up with the element after it. Otherwise we ignore the element
+            // after and allow following loop iterations to handle it.
+            left = AST::App(Box::new(left), Box::new(match order {
+                Associativity::Right => self.read_prefix(right)?,
+                Associativity::Left => right
+            }));
+        }
+    }
+
     pub fn read(&mut self) -> Result<'a, AST<'a>> {
-        self.read_basic()
+        self.read_basic().and_then(|b| self.read_prefix(b))
     }
 }
 
@@ -153,7 +223,7 @@ impl<'a> Context<'a> {
         }
     }
 
-    fn get_index(&self, op: &'a str) -> Option<NodeIndex> {
+    fn get_index(&self, op: &str) -> Option<NodeIndex> {
         self.precedence.node_identifiers()
             .find(|i| self.precedence[*i] == op)
     }
@@ -196,8 +266,43 @@ impl<'a> Context<'a> {
     }
 
     /// Returns whether or not an operator is infix for this context.
-    pub fn is_infix(&self, op: &'a str) -> bool {
+    pub fn is_infix(&self, op: &str) -> bool {
         self.infix.contains(op)
+    }
+
+    /// Returns whether or not there is a path from the left node to the right
+    /// node using Dijkstra's algorithm.
+    fn path_from(&self, left: NodeIndex, right: NodeIndex) -> bool {
+        dijkstra(&self.precedence, left, Some(right), |_| 1).contains_key(&right)
+    }
+
+    /// Determines the associativity between two tokens, returning nothing if
+    /// there is no source specifically for this case that determines their
+    /// associativity.
+    /// 
+    /// Cases with two identical operators will query the local associativity
+    /// map to determine their self-referential associativity.
+    /// 
+    /// Otherwise, the internal directed acyclic graph will be referred to. If a
+    /// path exists from the left operator to the right operator, left binds
+    /// stronger than right, so we use left associativity. If a path exists from
+    /// the right operator to the left operator, right binds stronger than left,
+    /// so we use right associativity. The acyclicity of the graph ensures that
+    /// these two conditions are mutually exclusive.
+    pub fn get_assoc(&self, left: &str, right: &str) -> Option<Associativity> {
+        if left == right {
+            return self.associativity.get(left).copied();
+        }
+
+        let (id_l, id_r) = (self.get_index(left)?, self.get_index(right)?);
+        
+        if self.path_from(id_l, id_r) {
+            Some(Associativity::Left)
+        } else if self.path_from(id_r, id_l) {
+            Some(Associativity::Right)
+        } else {
+            None
+        }
     }
 
 }
