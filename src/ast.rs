@@ -39,7 +39,7 @@ pub enum Error<'a> {
     UnexpectedClosingParentheses,
     ExpectedClosingParentheses,
     UnexpectedInfix(&'a str),
-    UndefinedAssociativity(String, String),
+    UndefinedAssociativity(&'a str, &'a str),
 }
 
 /// A reader of source code.
@@ -113,8 +113,8 @@ impl<'a> Reader<'a> {
         return Some(&self.src[start..self.pos]);
     }
 
-    pub fn assoc<'b>(&self, left: &'b AST, right: &'b AST) -> Result<'a, Associativity> {
-        fn reduce<'a>(ast: &'a AST<'a>) -> &'a AST<'a> {
+    pub fn assoc<'b>(&self, left: &'b AST<'a>, right: &'b AST<'a>) -> Result<'a, Associativity> {
+        fn reduce<'a, 'b>(ast: &'b AST<'a>) -> &'b AST<'a> {
             if let AST::App(l, _) = ast {
                 reduce(l)
             } else {
@@ -131,7 +131,7 @@ impl<'a> Reader<'a> {
                         (false, false) => Ok(Associativity::Left),
                         (true, false) => Ok(Associativity::Right),
                         (false, true) => Ok(Associativity::Left),
-                        (true, true) => Err((self.clone(), Error::UndefinedAssociativity(lv.to_string(), rv.to_string()))),
+                        (true, true) => Err((self.clone(), Error::UndefinedAssociativity(lv, rv))),
                     }
                 }
             } else {
