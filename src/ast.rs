@@ -146,6 +146,18 @@ impl<'a> Reader<'a> {
         }
     }
 
+    fn infix_op(&mut self) -> Option<&'a str> {
+        let copy = self.clone();
+
+        let token = self.token().filter(|op| self.context.is_infix(op));
+
+        if token.is_none() {
+            *self = copy;
+        }
+
+        token
+    }
+
     /// Parses a basic expression (a token or an expression between
     /// parentheses).
     pub fn read_basic(&mut self) -> Result<'a, AST<'a>> {
@@ -198,8 +210,42 @@ impl<'a> Reader<'a> {
         }
     }
 
+    pub fn read_infix(&mut self, mut left: AST<'a>) -> Result<'a, AST<'a>> {
+        loop {
+            // If there isn't an infix expression after the prefix expression,
+            // we can just return as there isn't anything more for this function
+            // to parse.
+            let Some(infix) = self.infix_op() else {
+                return Ok(left);
+            };
+
+            let left_and_infix = AST::App(Box::new(AST::Var(infix)), Box::new(left));
+
+            let all = self.read_prefix(left_and_infix)?;
+
+            // Try looking for another infix operation to determine precedence.
+            let Some(next) = self.clone().infix_op() else {
+                return Ok(all);
+            };
+
+            let order = self.assoc(&all, &AST::Var(next))?;
+
+            if order == Associativity::Right {
+                left = match all {
+                    AST::App(l, r) => AST::App(l, Box::new(self.read_infix(*r)?)),
+                    // This should never happen as we already know `all`
+                    // must be an AST::App anyway, but to appease the type
+                    // system this is the correct behaviour anyway.
+                    _ => self.read_infix(all)?,
+                }
+            } else {
+                return Ok(all);
+            }
+        }
+    }
+
     pub fn read(&mut self) -> Result<'a, AST<'a>> {
-        self.read_basic().and_then(|b| self.read_prefix(b))
+        self.read_basic().and_then(|b| self.read_prefix(b)).and_then(|b| self.read_infix(b))
     }
 }
 
@@ -263,6 +309,13 @@ impl<'a> Context<'a> {
     /// Indicates that an operator is an infix operator.
     pub fn infix(&mut self, op: &'a str) {
         self.infix.insert(op);
+    }
+
+    /// Indicates that each provided operator is an infix operator.
+    pub fn infix_many<const N: usize>(&mut self, ops: [&'a str; N]) {
+        for op in ops {
+            self.infix(op);
+        }
     }
 
     /// Returns whether or not an operator is infix for this context.
