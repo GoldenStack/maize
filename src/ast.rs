@@ -131,6 +131,7 @@ impl<'a> Reader<'a> {
                         (false, false) => Ok(Associativity::Left),
                         (true, false) => Ok(Associativity::Right),
                         (false, true) => Ok(Associativity::Left),
+                        (true, true) if lv == rv => Ok(Associativity::Left),
                         (true, true) => Err((self.clone(), Error::UndefinedAssociativity(lv, rv))),
                     }
                 }
