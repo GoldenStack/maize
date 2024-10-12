@@ -8,6 +8,8 @@ It aims to provide minimal resistance in converting ideas to code, while also be
 - Read expressions repeatedly until EOF (to finish reading a line after a root left-associative operator)
 - Add parentheses to the AST to handle operator precedence correctly
 - Implement significant whitespace (stolen from Haskell and Python)
+- (maybe) Allow using infix expressions like (/ 2) ≡ (\x x / 2).
+  - This would allow less error space (`Error::UnexpectedInfix`) but at the cost of either (1) potential name collision while defining the lambda or (2) a more complicated AST
 
 ## Contributing
 
