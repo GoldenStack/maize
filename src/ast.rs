@@ -115,10 +115,9 @@ impl<'a> Reader<'a> {
 
     pub fn assoc<'b>(&self, left: &'b AST<'a>, right: &'b AST<'a>) -> Result<'a, Associativity> {
         fn reduce<'a, 'b>(ast: &'b AST<'a>) -> &'b AST<'a> {
-            if let AST::App(l, _) = ast {
-                reduce(l)
-            } else {
-                ast
+            match ast {
+                AST::App(l, _) => reduce(l),
+                _ => ast
             }
         }
 
