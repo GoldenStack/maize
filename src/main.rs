@@ -9,7 +9,7 @@ fn main() {
 
     context.infix_many(["^", "*", "+"]);
     
-    let src = "\\x \\y 1 + 2 * 3 ^ 4 + 5";
+    let src = r"(\x \y x + y) 1 2 ";
 
     let mut reader = Reader::new(&context, src);
 

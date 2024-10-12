@@ -136,13 +136,13 @@ impl<'a> Reader<'a> {
                     }
                 }
             } else {
-                Ok(Associativity::Right)
+                Ok(Associativity::Left)
             }
         } else {
             if let AST::Var(_) = reduce(right) {
-                Ok(Associativity::Right)
+                Ok(Associativity::Left)
             } else {
-                Ok(Associativity::Right)
+                Ok(Associativity::Left)
             }
         }
     }
